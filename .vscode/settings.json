@@ -1,0 +1,14 @@
+{
+  "files.encoding": "utf8",
+  "files.autoGuessEncoding": false,
+  "[capl]": {
+    "files.encoding": "cp949"
+  },
+  "files.associations": {
+    "*.can": "c",
+    "*.cin": "c"
+  },
+  "files.eol": "\r\n",
+  "files.trimTrailingWhitespace": false,
+  "files.insertFinalNewline": true
+}

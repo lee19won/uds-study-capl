@@ -1,0 +1,16 @@
+# 기본: Git이 텍스트 여부를 자동 판단하지 않도록 함
+* -text
+
+# CAPL 소스 - CP949 인코딩, CRLF 고정
+*.can  text eol=crlf working-tree-encoding=CP949
+*.cin  text eol=crlf working-tree-encoding=CP949
+
+# CANoe 관련 파일 - 바이너리로 취급하여 Git이 내용을 건드리지 않게 함
+*.cfg  binary
+*.dbc  text eol=crlf
+*.arxml text eol=crlf
+*.vsysvar binary
+*.xml  text eol=crlf
+
+# 문서
+*.md   text eol=lf

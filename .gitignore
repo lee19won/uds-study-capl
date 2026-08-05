@@ -1,0 +1,21 @@
+# CANoe 자동 생성 파일
+*.bak
+*.bin
+*.cbf
+*.log
+*.blf
+*.asc
+Logging/
+*.ini
+
+# CANoe 설정 백업
+*.cfg.bak
+*~*
+
+# VS Code (settings.json은 공유하므로 제외하지 않음)
+.vscode/*
+!.vscode/settings.json
+
+# Windows
+Thumbs.db
+desktop.ini
