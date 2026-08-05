@@ -1,0 +1,56 @@
+/*@!Encoding:949*/
+/*===========================================================================
+  SBCM_ECU_Simulator.can
+
+  SBCM ECU Simulator - Main Node (Application Layer 자리)
+  --------------------------------------------------------------------------
+  이 파일은 NetworkLayer_API.cin 을 include 하여 사용하는 예시입니다.
+  오늘은 Network Layer 동작 확인이 목적이므로, Application Layer는
+  "받은 요청의 SID를 그대로 NRC 0x11(serviceNotSupported)로 부정 응답"하는
+  최소 뼈대만 넣었습니다.
+
+  다음 단계에서 AppLayer_OnDiagRequestReceived() 안에 실제 UDS 서비스
+  (0x10 DiagnosticSessionControl, 0x22 ReadDataByIdentifier,
+    0x19 ReadDTCInformation 등) 라우팅 로직을 채워 넣으면 됩니다.
+===========================================================================*/
+
+includes
+{
+    #include "NetworkLayer_API.cin"
+}
+
+variables
+{
+}
+
+on preStart
+{
+    NetworkLayer_Init();
+    write("SBCM ECU Simulator: Network Layer 초기화 완료. 0x7B0 요청 대기 중...");
+}
+
+// ===========================================================================
+// Application Layer 콜백 (임시 구현)
+// NetworkLayer_API.cin 이 UDS 요청 조립을 완료하면 이 함수가 호출됩니다.
+// ===========================================================================
+void AppLayer_OnDiagRequestReceived(byte data[], word len)
+{
+    byte negResp[3];
+
+    write("AppLayer: UDS Request 수신 (len=%d, SID=0x%X)", len, data[0]);
+
+    // TODO: 실제 서비스 라우팅으로 교체
+    //   switch(data[0])
+    //   {
+    //       case 0x10: Handle_DiagnosticSessionControl(data, len); break;
+    //       case 0x22: Handle_ReadDataByIdentifier(data, len);     break;
+    //       case 0x19: Handle_ReadDTCInformation(data, len);       break;
+    //       ...
+    //   }
+
+    negResp[0] = 0x7F;       // Negative Response SID
+    negResp[1] = data[0];    // 원래 요청 SID
+    negResp[2] = 0x11;       // NRC: serviceNotSupported
+
+    NetworkLayer_SendResponse(negResp, 3);
+}

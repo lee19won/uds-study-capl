@@ -1,0 +1,528 @@
+/*@!Encoding:949*/
+/*===========================================================================
+  NetworkLayer_API.cin
+
+  SBCM ECU Simulator - Network Layer (ISO 15765-2 / ISO-TP)
+  --------------------------------------------------------------------------
+  DBC: SBCM_XX_CANFD_DataBase_v0_1.dbc
+       SBCM_Diag_Req  (0x7B0, 1968) : Tester(OBD) -> SBCM   (Request/FlowControl)
+       SBCM_Diag_Resp (0x7B8, 1976) : SBCM -> Tester(OBD)   (Response/FlowControl)
+
+  주의) DBC v0.1 상에는 두 메시지의 송신 노드(Tx)가 반대로 기재되어 있습니다.
+        (SBCM_Diag_Req 의 Tx가 SBCM, SBCM_Diag_Resp 의 Tx가 OBD 로 되어있음)
+        on message 트리거 동작 자체에는 영향이 없으나, 실제 UDS 물리 주소
+        규약(Tester->ECU / ECU->Tester)에 맞게 DBC도 함께 수정하시길 권장합니다.
+        본 모듈은 "SBCM이 0x7B0을 수신하고 0x7B8로 응답한다"는 의도를 기준으로
+        구현되어 있습니다.
+
+  역할) Classic CAN 8Byte 기반의 ISO-TP Segmentation/Reassembly만 담당합니다.
+        실제 UDS 서비스 처리(0x10, 0x22, 0x19 ...)는 Application Layer의 몫이며,
+        이 모듈은 아래 2개의 인터페이스로만 Application Layer와 연결됩니다.
+
+        [수신] Network Layer가 요청 조립을 완료하면 호출:
+               void AppLayer_OnDiagRequestReceived(byte data[], word len)
+               -> Application Layer(메인 .can 파일)에서 반드시 구현해야 함
+
+        [송신] Application Layer가 응답을 보낼 때 호출:
+               void NetworkLayer_SendResponse(byte data[], word len)
+
+        [초기화] Application Layer의 on preStart 에서 반드시 호출:
+               void NetworkLayer_Init()
+===========================================================================*/
+
+includes
+{
+}
+
+variables
+{
+    // ---- DBC 심볼 기반 메시지 객체 ----
+    // (Rx는 on message 에서 this로 받으므로 별도 변수 불필요, Tx용만 선언)
+    message SBCM_Diag_Resp respMsg;
+
+    // ---- ISO-TP PCI Type ----
+    enum NL_PCI_TYPE
+    {
+        NL_PCI_SF = 0,  // Single Frame
+        NL_PCI_FF,      // First Frame
+        NL_PCI_CF,      // Consecutive Frame
+        NL_PCI_FC       // Flow Control
+    };
+
+    // ---- Flow Control FlowStatus ----
+    const byte FC_FS_CTS   = 0x00;  // Continue To Send
+    const byte FC_FS_WAIT  = 0x01;  // Wait
+    const byte FC_FS_OVFLW = 0x02;  // Overflow / Abort
+
+    // ---- Classic CAN 8Byte ISO-TP 상수 ----
+    const byte  CLASSIC_CAN_DLC = 8;
+    const byte  SF_MAX_DATA     = 7;    // Single Frame 최대 데이터
+    const byte  FF_FIRST_DATA   = 6;    // First Frame 첫 프레임 데이터
+    const byte  CF_MAX_DATA     = 7;    // Consecutive Frame 데이터
+    const word  ISOTP_MAX_LEN   = 4095; // ISO-TP 표준(Classic) 최대 길이
+    const byte  PADDING_BYTE    = 0x55; // 패딩 값 (OEM 정책에 맞게 조정 가능)
+
+    // ---- SBCM(자신)이 요청을 수신할 때 상대에게 보내는 FlowControl 파라미터 ----
+    // BlockSize=0  : 추가 FC 없이 남은 프레임 전부 받겠다는 의미
+    // STmin=0      : 프레임 간 최소 간격 없음
+    const byte  OWN_BLOCK_SIZE = 0;
+    const byte  OWN_ST_MIN     = 0x00;
+
+    // ---- 타임아웃 (ISO-TP 표준 파라미터명: N_Bs, N_Cr) ----
+    const dword N_BS_TIMEOUT_MS = 1000; // 응답 전송 중 상대 FC 대기 타임아웃
+    const dword N_CR_TIMEOUT_MS = 1000; // 요청 수신 중 다음 CF 대기 타임아웃
+
+    // =======================================================================
+    // RX 상태머신 : Tester -> SBCM 요청(0x7B0)을 조립하는 상태
+    // =======================================================================
+    enum NL_RX_STATE_TYPE
+    {
+        NL_RX_IDLE,
+        NL_RX_WAIT_CF
+    } rxState;
+
+    byte  rxBuffer[ISOTP_MAX_LEN];
+    word  rxTotalLen;
+    word  rxRecvLen;
+    byte  rxExpectedSN;
+    msTimer rxCrTimer;
+
+    // =======================================================================
+    // TX 상태머신 : SBCM -> Tester 응답(0x7B8)을 전송하는 상태
+    // =======================================================================
+    enum NL_TX_STATE_TYPE
+    {
+        NL_TX_IDLE,
+        NL_TX_WAIT_FC,
+        NL_TX_SENDING_CF
+    } txState;
+
+    byte  txBuffer[ISOTP_MAX_LEN];
+    word  txTotalLen;
+    word  txSentLen;
+    byte  txSN;
+    byte  txBlockSize;
+    byte  txSTmin;
+    byte  txFramesSinceFC;
+    msTimer txBsTimer;
+    msTimer txStminTimer;
+}
+
+// ===========================================================================
+// Application Layer 콜백 Prototype
+// -> 이 함수의 실제 구현(Body)은 이 파일을 include 하는 메인 .can 파일(Application
+//    Layer)에서 작성해야 합니다. 작성하지 않으면 컴파일 에러가 발생합니다.
+// ===========================================================================
+void AppLayer_OnDiagRequestReceived(byte data[], word len);
+
+
+// ===========================================================================
+// Public API : 초기화
+// ===========================================================================
+void NetworkLayer_Init()
+{
+    rxState   = NL_RX_IDLE;
+    txState   = NL_TX_IDLE;
+    rxRecvLen = 0;
+    rxTotalLen = 0;
+    txSentLen = 0;
+    txTotalLen = 0;
+
+    cancelTimer(rxCrTimer);
+    cancelTimer(txBsTimer);
+    cancelTimer(txStminTimer);
+}
+
+
+// ===========================================================================
+// RX Path : SBCM_Diag_Req(0x7B0) 수신
+//   - SF/FF/CF : Tester가 보낸 진단 요청 데이터
+//   - FC       : Tester가 보낸, "우리가 보내는 중인 응답"에 대한 FlowControl
+// ===========================================================================
+on message SBCM_Diag_Req
+{
+    byte pciType;
+
+    pciType = (this.byte(0) & 0xF0) >> 4;
+
+    switch (pciType)
+    {
+        case NL_PCI_SF:
+            NL_HandleSingleFrame(this);
+            break;
+
+        case NL_PCI_FF:
+            NL_HandleFirstFrame(this);
+            break;
+
+        case NL_PCI_CF:
+            NL_HandleConsecutiveFrame(this);
+            break;
+
+        case NL_PCI_FC:
+            NL_HandleFlowControl(this);
+            break;
+
+        default:
+            write("NetworkLayer(RX): Unknown PCI Type(0x%X)", pciType);
+            break;
+    }
+}
+
+void NL_HandleSingleFrame(message m)
+{
+    byte len;
+    byte i;
+
+    len = m.byte(0) & 0x0F;
+
+    if (len == 0 || len > SF_MAX_DATA)
+    {
+        write("NetworkLayer(RX): Invalid SF length(%d)", len);
+        return;
+    }
+
+    // SF가 새로 들어오면 진행 중이던 멀티프레임 수신은 폐기하고 새로 시작
+    if (rxState != NL_RX_IDLE)
+    {
+        write("NetworkLayer(RX): SF received while reassembling - aborting previous reception");
+    }
+    NL_AbortReception();
+
+    for (i = 0; i < len; i++)
+    {
+        rxBuffer[i] = m.byte(i + 1);
+    }
+    rxRecvLen = len;
+
+    NL_IndicateRequestReceived();
+}
+
+void NL_HandleFirstFrame(message m)
+{
+    word len;
+    byte i;
+
+    len = ((word)(m.byte(0) & 0x0F) << 8) | m.byte(1);
+
+    if (len <= SF_MAX_DATA || len > ISOTP_MAX_LEN)
+    {
+        write("NetworkLayer(RX): Invalid FF length(%d)", len);
+        return;
+    }
+
+    if (rxState != NL_RX_IDLE)
+    {
+        write("NetworkLayer(RX): FF received while reassembling - aborting previous reception");
+    }
+
+    rxTotalLen = len;
+    rxRecvLen  = 0;
+
+    for (i = 0; i < FF_FIRST_DATA; i++)
+    {
+        rxBuffer[rxRecvLen++] = m.byte(i + 2);
+    }
+
+    rxExpectedSN = 1;
+    rxState = NL_RX_WAIT_CF;
+
+    // 상대에게 "계속 보내라"는 Flow Control 즉시 회신
+    NL_SendFlowControl(FC_FS_CTS, OWN_BLOCK_SIZE, OWN_ST_MIN);
+
+    setTimer(rxCrTimer, N_CR_TIMEOUT_MS);
+}
+
+void NL_HandleConsecutiveFrame(message m)
+{
+    byte sn;
+    byte i;
+    word remain;
+    byte copyLen;
+
+    if (rxState != NL_RX_WAIT_CF)
+    {
+        write("NetworkLayer(RX): Unexpected CF (no active reception) - ignored");
+        return;
+    }
+
+    sn = m.byte(0) & 0x0F;
+
+    if (sn != rxExpectedSN)
+    {
+        write("NetworkLayer(RX): SN mismatch. expected=%d received=%d", rxExpectedSN, sn);
+        NL_AbortReception();
+        return;
+    }
+
+    cancelTimer(rxCrTimer);
+
+    remain  = rxTotalLen - rxRecvLen;
+    copyLen = (remain < CF_MAX_DATA) ? (byte)remain : CF_MAX_DATA;
+
+    for (i = 0; i < copyLen; i++)
+    {
+        rxBuffer[rxRecvLen++] = m.byte(i + 1);
+    }
+
+    // ISO 15765-2 : SN은 1->2->...->15->0->1... 로 순환 (mod 16)
+    rxExpectedSN = (rxExpectedSN + 1) & 0x0F;
+
+    if (rxRecvLen >= rxTotalLen)
+    {
+        rxState = NL_RX_IDLE;
+        NL_IndicateRequestReceived();
+    }
+    else
+    {
+        // TODO(확장 포인트): OWN_BLOCK_SIZE > 0 으로 운영할 경우, 여기서
+        // 수신 프레임 수를 세어 BlockSize에 도달하면 추가 FC를 보내야 합니다.
+        // 현재는 OWN_BLOCK_SIZE=0(무제한)이라 별도 처리가 필요 없습니다.
+        setTimer(rxCrTimer, N_CR_TIMEOUT_MS);
+    }
+}
+
+on timer rxCrTimer
+{
+    write("NetworkLayer(RX): N_Cr Timeout - Consecutive Frame not received in time");
+    NL_AbortReception();
+}
+
+void NL_AbortReception()
+{
+    rxState    = NL_RX_IDLE;
+    rxRecvLen  = 0;
+    rxTotalLen = 0;
+    cancelTimer(rxCrTimer);
+}
+
+void NL_SendFlowControl(byte fs, byte bs, byte stmin)
+{
+    respMsg.dlc = CLASSIC_CAN_DLC;
+    respMsg.byte(0) = (byte)((NL_PCI_FC << 4) | fs);
+    respMsg.byte(1) = bs;
+    respMsg.byte(2) = stmin;
+    respMsg.byte(3) = PADDING_BYTE;
+    respMsg.byte(4) = PADDING_BYTE;
+    respMsg.byte(5) = PADDING_BYTE;
+    respMsg.byte(6) = PADDING_BYTE;
+    respMsg.byte(7) = PADDING_BYTE;
+
+    output(respMsg);
+}
+
+void NL_IndicateRequestReceived()
+{
+    write("NetworkLayer(RX): UDS Request reassembled (len=%d)", rxRecvLen);
+
+    // Application Layer로 완성된 UDS 요청 전달
+    AppLayer_OnDiagRequestReceived(rxBuffer, rxRecvLen);
+}
+
+
+// ===========================================================================
+// TX Path : Application Layer가 요청한 응답을 SBCM_Diag_Resp(0x7B8)로 전송
+// ===========================================================================
+void NetworkLayer_SendResponse(byte data[], word len)
+{
+    byte i;
+
+    if (len == 0 || len > ISOTP_MAX_LEN)
+    {
+        write("NetworkLayer(TX): Invalid response length(%d)", len);
+        return;
+    }
+
+    if (txState != NL_TX_IDLE)
+    {
+        write("NetworkLayer(TX): Previous transmission still active - aborting old one");
+        NL_AbortTransmission();
+    }
+
+    for (i = 0; i < len; i++)
+    {
+        txBuffer[i] = data[i];
+    }
+    txTotalLen = len;
+    txSentLen  = 0;
+
+    if (len <= SF_MAX_DATA)
+    {
+        NL_SendSingleFrame();
+    }
+    else
+    {
+        NL_SendFirstFrame();
+    }
+}
+
+void NL_SendSingleFrame()
+{
+    byte i;
+
+    respMsg.dlc = CLASSIC_CAN_DLC;
+    respMsg.byte(0) = (byte)((NL_PCI_SF << 4) | (txTotalLen & 0x0F));
+
+    for (i = 0; i < txTotalLen; i++)
+    {
+        respMsg.byte(i + 1) = txBuffer[i];
+    }
+    for (i = (byte)txTotalLen; i < SF_MAX_DATA; i++)
+    {
+        respMsg.byte(i + 1) = PADDING_BYTE;
+    }
+
+    output(respMsg);
+
+    write("NetworkLayer(TX): SF response sent (len=%d)", txTotalLen);
+
+    txState   = NL_TX_IDLE;
+    txSentLen = 0;
+}
+
+void NL_SendFirstFrame()
+{
+    byte i;
+
+    respMsg.dlc = CLASSIC_CAN_DLC;
+    respMsg.byte(0) = (byte)((NL_PCI_FF << 4) | ((txTotalLen >> 8) & 0x0F));
+    respMsg.byte(1) = (byte)(txTotalLen & 0xFF);
+
+    for (i = 0; i < FF_FIRST_DATA; i++)
+    {
+        respMsg.byte(i + 2) = txBuffer[i];
+    }
+
+    output(respMsg);
+
+    txSentLen = FF_FIRST_DATA;
+    txSN      = 1;
+    txState   = NL_TX_WAIT_FC;
+
+    setTimer(txBsTimer, N_BS_TIMEOUT_MS);
+}
+
+void NL_HandleFlowControl(message m)
+{
+    byte fs;
+
+    if (txState != NL_TX_WAIT_FC)
+    {
+        // 우리가 응답을 보내는 중이 아닌데 들어온 FC는 무시
+        return;
+    }
+
+    fs = m.byte(0) & 0x0F;
+    cancelTimer(txBsTimer);
+
+    switch (fs)
+    {
+        case FC_FS_CTS:
+            txBlockSize      = m.byte(1);
+            txSTmin          = m.byte(2);
+            txFramesSinceFC  = 0;
+            txState          = NL_TX_SENDING_CF;
+            NL_SendOneConsecutiveFrame();
+            break;
+
+        case FC_FS_WAIT:
+            setTimer(txBsTimer, N_BS_TIMEOUT_MS);  // 계속 대기
+            break;
+
+        case FC_FS_OVFLW:
+            write("NetworkLayer(TX): FlowControl Overflow received - aborting transmission");
+            NL_AbortTransmission();
+            break;
+
+        default:
+            write("NetworkLayer(TX): Unknown FlowStatus(0x%X) - aborting", fs);
+            NL_AbortTransmission();
+            break;
+    }
+}
+
+void NL_SendOneConsecutiveFrame()
+{
+    byte i;
+    word remain;
+    byte copyLen;
+
+    remain  = txTotalLen - txSentLen;
+    copyLen = (remain < CF_MAX_DATA) ? (byte)remain : CF_MAX_DATA;
+
+    respMsg.dlc = CLASSIC_CAN_DLC;
+    respMsg.byte(0) = (byte)((NL_PCI_CF << 4) | (txSN & 0x0F));
+
+    for (i = 0; i < copyLen; i++)
+    {
+        respMsg.byte(i + 1) = txBuffer[txSentLen + i];
+    }
+    for (i = copyLen; i < CF_MAX_DATA; i++)
+    {
+        respMsg.byte(i + 1) = PADDING_BYTE;
+    }
+
+    output(respMsg);
+
+    txSentLen += copyLen;
+    // ISO 15765-2 : SN은 1->2->...->15->0->1... 로 순환 (mod 16)
+    txSN = (txSN + 1) & 0x0F;
+    txFramesSinceFC++;
+
+    if (txSentLen >= txTotalLen)
+    {
+        write("NetworkLayer(TX): Multi-frame response transmission complete (len=%d)", txTotalLen);
+        txState = NL_TX_IDLE;
+        return;
+    }
+
+    if (txBlockSize != 0 && txFramesSinceFC >= txBlockSize)
+    {
+        // BlockSize 도달 -> 다음 FlowControl 대기
+        txState = NL_TX_WAIT_FC;
+        setTimer(txBsTimer, N_BS_TIMEOUT_MS);
+        return;
+    }
+
+    // STmin 간격을 두고 다음 CF 전송
+    setTimer(txStminTimer, NL_ConvertSTmin(txSTmin));
+}
+
+on timer txStminTimer
+{
+    NL_SendOneConsecutiveFrame();
+}
+
+on timer txBsTimer
+{
+    write("NetworkLayer(TX): N_Bs Timeout - FlowControl not received in time");
+    NL_AbortTransmission();
+}
+
+void NL_AbortTransmission()
+{
+    txState    = NL_TX_IDLE;
+    txSentLen  = 0;
+    txTotalLen = 0;
+    cancelTimer(txBsTimer);
+    cancelTimer(txStminTimer);
+}
+
+// STmin(0x00~0x7F = 0~127ms, 0xF1~0xF9 = 100~900us)을 CAPL msTimer(1ms 단위)에
+// 맞게 변환. us 단위는 CAPL msTimer로 정밀 표현이 불가하여 1ms로 근사 처리합니다.
+dword NL_ConvertSTmin(byte stmin)
+{
+    if (stmin <= 0x7F)
+    {
+        return stmin;
+    }
+    else if (stmin >= 0xF1 && stmin <= 0xF9)
+    {
+        return 1;
+    }
+    else
+    {
+        write("NetworkLayer(TX): Reserved STmin value(0x%X) - fallback to 127ms", stmin);
+        return 127;
+    }
+}
