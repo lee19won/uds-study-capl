@@ -1,17 +1,23 @@
-/*@!Encoding:949*/
+/*@!Encoding:1252*/
 /*===========================================================================
   SBCM_ECU_Simulator.can
 
-  SBCM ECU Simulator - Main Node (Application Layer 자리)
+  SBCM ECU Simulator - Main Node (Application Layer)
   --------------------------------------------------------------------------
-  이 파일은 NetworkLayer_API.cin 을 include 하여 사용하는 예시입니다.
-  오늘은 Network Layer 동작 확인이 목적이므로, Application Layer는
-  "받은 요청의 SID를 그대로 NRC 0x11(serviceNotSupported)로 부정 응답"하는
-  최소 뼈대만 넣었습니다.
+  This file demonstrates how to use NetworkLayer_API.cin.
 
-  다음 단계에서 AppLayer_OnDiagRequestReceived() 안에 실제 UDS 서비스
-  (0x10 DiagnosticSessionControl, 0x22 ReadDataByIdentifier,
-    0x19 ReadDTCInformation 등) 라우팅 로직을 채워 넣으면 됩니다.
+  At this stage the Application Layer is only a skeleton: every incoming
+  request is answered with a negative response, NRC 0x11 (serviceNotSupported).
+
+  Next step: implement the actual UDS services inside
+  AppLayer_OnDiagRequestReceived(), e.g.
+      0x10 DiagnosticSessionControl
+      0x22 ReadDataByIdentifier
+      0x19 ReadDTCInformation
+
+  ENCODING:
+      This file is intentionally pure ASCII (no localized characters) so that
+      it is immune to code page issues between CANoe, Git and text editors.
 ===========================================================================*/
 
 includes
@@ -21,26 +27,32 @@ includes
 
 variables
 {
+    // ---- Negative Response Codes (subset) ----
+    const byte NRC_SERVICE_NOT_SUPPORTED = 0x11;
+
+    const byte SID_NEGATIVE_RESPONSE = 0x7F;
 }
 
 on preStart
 {
     NetworkLayer_Init();
-    write("SBCM ECU Simulator: Network Layer 초기화 완료. 0x7B0 요청 대기 중...");
+    write("SBCM ECU Simulator: Network Layer initialized. Waiting for requests on 0x7B0 ...");
 }
 
 // ===========================================================================
-// Application Layer 콜백 (임시 구현)
-// NetworkLayer_API.cin 이 UDS 요청 조립을 완료하면 이 함수가 호출됩니다.
+// Application Layer callback
+// Called by NetworkLayer_API.cin once a complete UDS request is available.
 // ===========================================================================
 void AppLayer_OnDiagRequestReceived(byte data[], word len)
 {
-    byte negResp[3];
+    byte sid;
 
-    write("AppLayer: UDS Request 수신 (len=%d, SID=0x%X)", len, data[0]);
+    sid = data[0];
 
-    // TODO: 실제 서비스 라우팅으로 교체
-    //   switch(data[0])
+    write("AppLayer: UDS request received (len=%d, SID=0x%02X)", len, sid);
+
+    // TODO: replace with the real service dispatcher, for example
+    //   switch (sid)
     //   {
     //       case 0x10: Handle_DiagnosticSessionControl(data, len); break;
     //       case 0x22: Handle_ReadDataByIdentifier(data, len);     break;
@@ -48,9 +60,21 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
     //       ...
     //   }
 
-    negResp[0] = 0x7F;       // Negative Response SID
-    negResp[1] = data[0];    // 원래 요청 SID
-    negResp[2] = 0x11;       // NRC: serviceNotSupported
+    AppLayer_SendNegativeResponse(sid, NRC_SERVICE_NOT_SUPPORTED);
+}
 
-    NetworkLayer_SendResponse(negResp, 3);
+// ===========================================================================
+// Helper: send a negative response  ( 0x7F <SID> <NRC> )
+// ===========================================================================
+void AppLayer_SendNegativeResponse(byte sid, byte nrc)
+{
+    byte resp[3];
+
+    resp[0] = SID_NEGATIVE_RESPONSE;
+    resp[1] = sid;
+    resp[2] = nrc;
+
+    write("AppLayer: Negative response 0x7F 0x%02X 0x%02X", sid, nrc);
+
+    NetworkLayer_SendResponse(resp, 3);
 }

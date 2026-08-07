@@ -1,16 +1,36 @@
-# 기본: Git이 텍스트 여부를 자동 판단하지 않도록 함
+# ---------------------------------------------------------------
+# Line ending / encoding policy
+#
+# All CAPL sources are kept as pure ASCII, so no working-tree-encoding
+# conversion is needed. This removes every code page related problem
+# between CANoe, Git, VS Code and GitHub.
+# ---------------------------------------------------------------
+
+# Do not let Git guess
 * -text
 
-# CAPL 소스 - CP949 인코딩, CRLF 고정
-*.can  text eol=crlf working-tree-encoding=CP949
-*.cin  text eol=crlf working-tree-encoding=CP949
+# CAPL sources - ASCII, CRLF (CANoe is Windows only)
+*.can  text eol=crlf
+*.cin  text eol=crlf
 
-# CANoe 관련 파일 - 바이너리로 취급하여 Git이 내용을 건드리지 않게 함
-*.cfg  binary
-*.dbc  text eol=crlf
+# Network databases - text, diffable
+*.dbc   text eol=crlf
+*.ldf   text eol=crlf
 *.arxml text eol=crlf
-*.vsysvar binary
-*.xml  text eol=crlf
+*.xml   text eol=crlf
 
-# 문서
-*.md   text eol=lf
+# Binary - Git must not touch the content
+*.cfg      binary
+*.stcfg    binary
+*.vsysvar  binary
+*.cdd      binary
+*.odx      binary
+*.pdx      binary
+*.tse      binary
+*.xvp      binary
+*.xlsx     binary
+*.pdf      binary
+*.vtcfg.local binary
+
+# Documentation
+*.md text eol=lf

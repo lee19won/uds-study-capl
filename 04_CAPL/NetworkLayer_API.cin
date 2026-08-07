@@ -1,33 +1,43 @@
-/*@!Encoding:949*/
+/*@!Encoding:1252*/
 /*===========================================================================
   NetworkLayer_API.cin
 
   SBCM ECU Simulator - Network Layer (ISO 15765-2 / ISO-TP)
   --------------------------------------------------------------------------
-  DBC: SBCM_XX_CANFD_DataBase_v0_1.dbc
-       SBCM_Diag_Req  (0x7B0, 1968) : Tester(OBD) -> SBCM   (Request/FlowControl)
-       SBCM_Diag_Resp (0x7B8, 1976) : SBCM -> Tester(OBD)   (Response/FlowControl)
+  Database: SBCM_XX_CANFD_DataBase_v0_1.dbc
+      SBCM_Diag_Req  (0x7B0, 1968) : Tester(OBD) -> SBCM  (Request / FlowControl)
+      SBCM_Diag_Resp (0x7B8, 1976) : SBCM -> Tester(OBD)  (Response / FlowControl)
 
-  주의) DBC v0.1 상에는 두 메시지의 송신 노드(Tx)가 반대로 기재되어 있습니다.
-        (SBCM_Diag_Req 의 Tx가 SBCM, SBCM_Diag_Resp 의 Tx가 OBD 로 되어있음)
-        on message 트리거 동작 자체에는 영향이 없으나, 실제 UDS 물리 주소
-        규약(Tester->ECU / ECU->Tester)에 맞게 DBC도 함께 수정하시길 권장합니다.
-        본 모듈은 "SBCM이 0x7B0을 수신하고 0x7B8로 응답한다"는 의도를 기준으로
-        구현되어 있습니다.
+  NOTE ON THE DBC:
+      In DBC v0.1 the transmitter nodes of the two messages are swapped.
+      (SBCM_Diag_Req is declared with Tx = SBCM, SBCM_Diag_Resp with Tx = OBD)
+      This does not affect the "on message" trigger behaviour, but it does not
+      match the usual UDS physical addressing convention (Tester->ECU / ECU->
+      Tester). Fixing the DBC is recommended.
+      This module is implemented according to the intended behaviour:
+      SBCM receives on 0x7B0 and responds on 0x7B8.
 
-  역할) Classic CAN 8Byte 기반의 ISO-TP Segmentation/Reassembly만 담당합니다.
-        실제 UDS 서비스 처리(0x10, 0x22, 0x19 ...)는 Application Layer의 몫이며,
-        이 모듈은 아래 2개의 인터페이스로만 Application Layer와 연결됩니다.
+  SCOPE:
+      This module implements ONLY the ISO-TP segmentation and reassembly on
+      top of Classic CAN 8 byte frames. UDS service handling (0x10, 0x22,
+      0x19, ...) belongs to the Application Layer.
 
-        [수신] Network Layer가 요청 조립을 완료하면 호출:
-               void AppLayer_OnDiagRequestReceived(byte data[], word len)
-               -> Application Layer(메인 .can 파일)에서 반드시 구현해야 함
+      The Network Layer connects to the Application Layer through exactly
+      two interfaces:
 
-        [송신] Application Layer가 응답을 보낼 때 호출:
-               void NetworkLayer_SendResponse(byte data[], word len)
+      [RX] Called by the Network Layer once a request has been reassembled:
+              void AppLayer_OnDiagRequestReceived(byte data[], word len)
+           -> MUST be implemented by the Application Layer (main .can file).
 
-        [초기화] Application Layer의 on preStart 에서 반드시 호출:
-               void NetworkLayer_Init()
+      [TX] Called by the Application Layer to send a response:
+              void NetworkLayer_SendResponse(byte data[], word len)
+
+      [INIT] MUST be called from the Application Layer "on preStart":
+              void NetworkLayer_Init()
+
+  ENCODING:
+      This file is intentionally pure ASCII (no localized characters) so that
+      it is immune to code page issues between CANoe, Git and text editors.
 ===========================================================================*/
 
 includes
@@ -36,11 +46,12 @@ includes
 
 variables
 {
-    // ---- DBC 심볼 기반 메시지 객체 ----
-    // (Rx는 on message 에서 this로 받으므로 별도 변수 불필요, Tx용만 선언)
+    // ---- Message object based on DBC symbols ----
+    // (RX frames are accessed via "this" inside on message, so only the TX
+    //  message object needs to be declared here.)
     message SBCM_Diag_Resp respMsg;
 
-    // ---- ISO-TP PCI Type ----
+    // ---- ISO-TP PCI types ----
     enum NL_PCI_TYPE
     {
         NL_PCI_SF = 0,  // Single Frame
@@ -49,31 +60,31 @@ variables
         NL_PCI_FC       // Flow Control
     };
 
-    // ---- Flow Control FlowStatus ----
+    // ---- Flow Control - FlowStatus values ----
     const byte FC_FS_CTS   = 0x00;  // Continue To Send
     const byte FC_FS_WAIT  = 0x01;  // Wait
     const byte FC_FS_OVFLW = 0x02;  // Overflow / Abort
 
-    // ---- Classic CAN 8Byte ISO-TP 상수 ----
+    // ---- Classic CAN 8 byte ISO-TP constants ----
     const byte  CLASSIC_CAN_DLC = 8;
-    const byte  SF_MAX_DATA     = 7;    // Single Frame 최대 데이터
-    const byte  FF_FIRST_DATA   = 6;    // First Frame 첫 프레임 데이터
-    const byte  CF_MAX_DATA     = 7;    // Consecutive Frame 데이터
-    const word  ISOTP_MAX_LEN   = 4095; // ISO-TP 표준(Classic) 최대 길이
-    const byte  PADDING_BYTE    = 0x55; // 패딩 값 (OEM 정책에 맞게 조정 가능)
+    const byte  SF_MAX_DATA     = 7;    // max payload in a Single Frame
+    const byte  FF_FIRST_DATA   = 6;    // payload carried by a First Frame
+    const byte  CF_MAX_DATA     = 7;    // payload per Consecutive Frame
+    const word  ISOTP_MAX_LEN   = 4095; // max length for classic ISO-TP
+    const byte  PADDING_BYTE    = 0x55; // padding value (adjust per OEM spec)
 
-    // ---- SBCM(자신)이 요청을 수신할 때 상대에게 보내는 FlowControl 파라미터 ----
-    // BlockSize=0  : 추가 FC 없이 남은 프레임 전부 받겠다는 의미
-    // STmin=0      : 프레임 간 최소 간격 없음
+    // ---- Flow Control parameters sent by SBCM while receiving a request ----
+    // BlockSize = 0 : receive all remaining frames without further FC
+    // STmin     = 0 : no minimum separation time required
     const byte  OWN_BLOCK_SIZE = 0;
     const byte  OWN_ST_MIN     = 0x00;
 
-    // ---- 타임아웃 (ISO-TP 표준 파라미터명: N_Bs, N_Cr) ----
-    const dword N_BS_TIMEOUT_MS = 1000; // 응답 전송 중 상대 FC 대기 타임아웃
-    const dword N_CR_TIMEOUT_MS = 1000; // 요청 수신 중 다음 CF 대기 타임아웃
+    // ---- Timeouts (ISO-TP parameter names: N_Bs, N_Cr) ----
+    const dword N_BS_TIMEOUT_MS = 1000; // waiting for FC while transmitting
+    const dword N_CR_TIMEOUT_MS = 1000; // waiting for next CF while receiving
 
     // =======================================================================
-    // RX 상태머신 : Tester -> SBCM 요청(0x7B0)을 조립하는 상태
+    // RX state machine : reassembles requests (Tester -> SBCM, 0x7B0)
     // =======================================================================
     enum NL_RX_STATE_TYPE
     {
@@ -88,7 +99,7 @@ variables
     msTimer rxCrTimer;
 
     // =======================================================================
-    // TX 상태머신 : SBCM -> Tester 응답(0x7B8)을 전송하는 상태
+    // TX state machine : transmits responses (SBCM -> Tester, 0x7B8)
     // =======================================================================
     enum NL_TX_STATE_TYPE
     {
@@ -109,23 +120,23 @@ variables
 }
 
 // ===========================================================================
-// Application Layer 콜백 Prototype
-// -> 이 함수의 실제 구현(Body)은 이 파일을 include 하는 메인 .can 파일(Application
-//    Layer)에서 작성해야 합니다. 작성하지 않으면 컴파일 에러가 발생합니다.
+// Application Layer callback prototype
+// -> The body of this function must be implemented in the main .can file
+//    that includes this module. Without it, compilation will fail.
 // ===========================================================================
 void AppLayer_OnDiagRequestReceived(byte data[], word len);
 
 
 // ===========================================================================
-// Public API : 초기화
+// Public API : initialization
 // ===========================================================================
 void NetworkLayer_Init()
 {
-    rxState   = NL_RX_IDLE;
-    txState   = NL_TX_IDLE;
-    rxRecvLen = 0;
+    rxState    = NL_RX_IDLE;
+    txState    = NL_TX_IDLE;
+    rxRecvLen  = 0;
     rxTotalLen = 0;
-    txSentLen = 0;
+    txSentLen  = 0;
     txTotalLen = 0;
 
     cancelTimer(rxCrTimer);
@@ -135,9 +146,9 @@ void NetworkLayer_Init()
 
 
 // ===========================================================================
-// RX Path : SBCM_Diag_Req(0x7B0) 수신
-//   - SF/FF/CF : Tester가 보낸 진단 요청 데이터
-//   - FC       : Tester가 보낸, "우리가 보내는 중인 응답"에 대한 FlowControl
+// RX path : reception of SBCM_Diag_Req (0x7B0)
+//   SF/FF/CF : diagnostic request data sent by the tester
+//   FC       : flow control for a multi frame response currently being sent
 // ===========================================================================
 on message SBCM_Diag_Req
 {
@@ -164,7 +175,7 @@ on message SBCM_Diag_Req
             break;
 
         default:
-            write("NetworkLayer(RX): Unknown PCI Type(0x%X)", pciType);
+            write("NetworkLayer(RX): Unknown PCI type (0x%X)", pciType);
             break;
     }
 }
@@ -178,11 +189,11 @@ void NL_HandleSingleFrame(message m)
 
     if (len == 0 || len > SF_MAX_DATA)
     {
-        write("NetworkLayer(RX): Invalid SF length(%d)", len);
+        write("NetworkLayer(RX): Invalid SF length (%d)", len);
         return;
     }
 
-    // SF가 새로 들어오면 진행 중이던 멀티프레임 수신은 폐기하고 새로 시작
+    // A new SF discards any reassembly that is currently in progress.
     if (rxState != NL_RX_IDLE)
     {
         write("NetworkLayer(RX): SF received while reassembling - aborting previous reception");
@@ -207,7 +218,7 @@ void NL_HandleFirstFrame(message m)
 
     if (len <= SF_MAX_DATA || len > ISOTP_MAX_LEN)
     {
-        write("NetworkLayer(RX): Invalid FF length(%d)", len);
+        write("NetworkLayer(RX): Invalid FF length (%d)", len);
         return;
     }
 
@@ -225,9 +236,9 @@ void NL_HandleFirstFrame(message m)
     }
 
     rxExpectedSN = 1;
-    rxState = NL_RX_WAIT_CF;
+    rxState      = NL_RX_WAIT_CF;
 
-    // 상대에게 "계속 보내라"는 Flow Control 즉시 회신
+    // Immediately grant the tester permission to continue.
     NL_SendFlowControl(FC_FS_CTS, OWN_BLOCK_SIZE, OWN_ST_MIN);
 
     setTimer(rxCrTimer, N_CR_TIMEOUT_MS);
@@ -265,7 +276,7 @@ void NL_HandleConsecutiveFrame(message m)
         rxBuffer[rxRecvLen++] = m.byte(i + 1);
     }
 
-    // ISO 15765-2 : SN은 1->2->...->15->0->1... 로 순환 (mod 16)
+    // ISO 15765-2: SN wraps around 1->2->...->15->0->1... (modulo 16)
     rxExpectedSN = (rxExpectedSN + 1) & 0x0F;
 
     if (rxRecvLen >= rxTotalLen)
@@ -275,16 +286,16 @@ void NL_HandleConsecutiveFrame(message m)
     }
     else
     {
-        // TODO(확장 포인트): OWN_BLOCK_SIZE > 0 으로 운영할 경우, 여기서
-        // 수신 프레임 수를 세어 BlockSize에 도달하면 추가 FC를 보내야 합니다.
-        // 현재는 OWN_BLOCK_SIZE=0(무제한)이라 별도 처리가 필요 없습니다.
+        // Extension point: if OWN_BLOCK_SIZE > 0 is used, count the received
+        // frames here and send another FC once BlockSize has been reached.
+        // With OWN_BLOCK_SIZE = 0 (unlimited) no extra handling is required.
         setTimer(rxCrTimer, N_CR_TIMEOUT_MS);
     }
 }
 
 on timer rxCrTimer
 {
-    write("NetworkLayer(RX): N_Cr Timeout - Consecutive Frame not received in time");
+    write("NetworkLayer(RX): N_Cr timeout - Consecutive Frame not received in time");
     NL_AbortReception();
 }
 
@@ -313,15 +324,15 @@ void NL_SendFlowControl(byte fs, byte bs, byte stmin)
 
 void NL_IndicateRequestReceived()
 {
-    write("NetworkLayer(RX): UDS Request reassembled (len=%d)", rxRecvLen);
+    write("NetworkLayer(RX): UDS request reassembled (len=%d)", rxRecvLen);
 
-    // Application Layer로 완성된 UDS 요청 전달
+    // Hand the complete UDS request over to the Application Layer.
     AppLayer_OnDiagRequestReceived(rxBuffer, rxRecvLen);
 }
 
 
 // ===========================================================================
-// TX Path : Application Layer가 요청한 응답을 SBCM_Diag_Resp(0x7B8)로 전송
+// TX path : send an Application Layer response on SBCM_Diag_Resp (0x7B8)
 // ===========================================================================
 void NetworkLayer_SendResponse(byte data[], word len)
 {
@@ -329,13 +340,13 @@ void NetworkLayer_SendResponse(byte data[], word len)
 
     if (len == 0 || len > ISOTP_MAX_LEN)
     {
-        write("NetworkLayer(TX): Invalid response length(%d)", len);
+        write("NetworkLayer(TX): Invalid response length (%d)", len);
         return;
     }
 
     if (txState != NL_TX_IDLE)
     {
-        write("NetworkLayer(TX): Previous transmission still active - aborting old one");
+        write("NetworkLayer(TX): Previous transmission still active - aborting it");
         NL_AbortTransmission();
     }
 
@@ -408,7 +419,7 @@ void NL_HandleFlowControl(message m)
 
     if (txState != NL_TX_WAIT_FC)
     {
-        // 우리가 응답을 보내는 중이 아닌데 들어온 FC는 무시
+        // FC received while no response transmission is pending - ignore.
         return;
     }
 
@@ -418,15 +429,15 @@ void NL_HandleFlowControl(message m)
     switch (fs)
     {
         case FC_FS_CTS:
-            txBlockSize      = m.byte(1);
-            txSTmin          = m.byte(2);
-            txFramesSinceFC  = 0;
-            txState          = NL_TX_SENDING_CF;
+            txBlockSize     = m.byte(1);
+            txSTmin         = m.byte(2);
+            txFramesSinceFC = 0;
+            txState         = NL_TX_SENDING_CF;
             NL_SendOneConsecutiveFrame();
             break;
 
         case FC_FS_WAIT:
-            setTimer(txBsTimer, N_BS_TIMEOUT_MS);  // 계속 대기
+            setTimer(txBsTimer, N_BS_TIMEOUT_MS);  // keep waiting
             break;
 
         case FC_FS_OVFLW:
@@ -435,7 +446,7 @@ void NL_HandleFlowControl(message m)
             break;
 
         default:
-            write("NetworkLayer(TX): Unknown FlowStatus(0x%X) - aborting", fs);
+            write("NetworkLayer(TX): Unknown FlowStatus (0x%X) - aborting", fs);
             NL_AbortTransmission();
             break;
     }
@@ -465,26 +476,26 @@ void NL_SendOneConsecutiveFrame()
     output(respMsg);
 
     txSentLen += copyLen;
-    // ISO 15765-2 : SN은 1->2->...->15->0->1... 로 순환 (mod 16)
+    // ISO 15765-2: SN wraps around 1->2->...->15->0->1... (modulo 16)
     txSN = (txSN + 1) & 0x0F;
     txFramesSinceFC++;
 
     if (txSentLen >= txTotalLen)
     {
-        write("NetworkLayer(TX): Multi-frame response transmission complete (len=%d)", txTotalLen);
+        write("NetworkLayer(TX): Multi frame response complete (len=%d)", txTotalLen);
         txState = NL_TX_IDLE;
         return;
     }
 
     if (txBlockSize != 0 && txFramesSinceFC >= txBlockSize)
     {
-        // BlockSize 도달 -> 다음 FlowControl 대기
+        // BlockSize reached - wait for the next FlowControl.
         txState = NL_TX_WAIT_FC;
         setTimer(txBsTimer, N_BS_TIMEOUT_MS);
         return;
     }
 
-    // STmin 간격을 두고 다음 CF 전송
+    // Respect STmin before sending the next CF.
     setTimer(txStminTimer, NL_ConvertSTmin(txSTmin));
 }
 
@@ -495,7 +506,7 @@ on timer txStminTimer
 
 on timer txBsTimer
 {
-    write("NetworkLayer(TX): N_Bs Timeout - FlowControl not received in time");
+    write("NetworkLayer(TX): N_Bs timeout - FlowControl not received in time");
     NL_AbortTransmission();
 }
 
@@ -508,8 +519,10 @@ void NL_AbortTransmission()
     cancelTimer(txStminTimer);
 }
 
-// STmin(0x00~0x7F = 0~127ms, 0xF1~0xF9 = 100~900us)을 CAPL msTimer(1ms 단위)에
-// 맞게 변환. us 단위는 CAPL msTimer로 정밀 표현이 불가하여 1ms로 근사 처리합니다.
+// Convert the ISO-TP STmin encoding into a CAPL msTimer value (1 ms base).
+//   0x00 - 0x7F :   0 - 127 ms
+//   0xF1 - 0xF9 : 100 - 900 us  (rounded up to 1 ms, msTimer cannot do us)
+//   others      : reserved
 dword NL_ConvertSTmin(byte stmin)
 {
     if (stmin <= 0x7F)
@@ -522,7 +535,7 @@ dword NL_ConvertSTmin(byte stmin)
     }
     else
     {
-        write("NetworkLayer(TX): Reserved STmin value(0x%X) - fallback to 127ms", stmin);
+        write("NetworkLayer(TX): Reserved STmin value (0x%X) - falling back to 127 ms", stmin);
         return 127;
     }
 }
