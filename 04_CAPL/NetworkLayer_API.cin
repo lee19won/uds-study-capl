@@ -120,11 +120,10 @@ variables
 }
 
 // ===========================================================================
-// Application Layer callback prototype
+// Application Layer callback
 // -> The body of this function must be implemented in the main .can file
 //    that includes this module. Without it, compilation will fail.
 // ===========================================================================
-void AppLayer_OnDiagRequestReceived(byte data[], word len);
 
 
 // ===========================================================================
@@ -152,26 +151,33 @@ void NetworkLayer_Init()
 // ===========================================================================
 on message SBCM_Diag_Req
 {
+    byte rxFrame[8];
+    byte i;
     byte pciType;
 
-    pciType = (this.byte(0) & 0xF0) >> 4;
+    for (i = 0; i < 8; i++)
+    {
+        rxFrame[i] = this.byte(i);
+    }
+
+    pciType = (rxFrame[0] & 0xF0) >> 4;
 
     switch (pciType)
     {
         case NL_PCI_SF:
-            NL_HandleSingleFrame(this);
+            NL_HandleSingleFrame(rxFrame);
             break;
 
         case NL_PCI_FF:
-            NL_HandleFirstFrame(this);
+            NL_HandleFirstFrame(rxFrame);
             break;
 
         case NL_PCI_CF:
-            NL_HandleConsecutiveFrame(this);
+            NL_HandleConsecutiveFrame(rxFrame);
             break;
 
         case NL_PCI_FC:
-            NL_HandleFlowControl(this);
+            NL_HandleFlowControl(rxFrame);
             break;
 
         default:
@@ -180,12 +186,12 @@ on message SBCM_Diag_Req
     }
 }
 
-void NL_HandleSingleFrame(message m)
+void NL_HandleSingleFrame(byte frame[])
 {
     byte len;
     byte i;
 
-    len = m.byte(0) & 0x0F;
+    len = frame[0] & 0x0F;
 
     if (len == 0 || len > SF_MAX_DATA)
     {
@@ -202,19 +208,19 @@ void NL_HandleSingleFrame(message m)
 
     for (i = 0; i < len; i++)
     {
-        rxBuffer[i] = m.byte(i + 1);
+        rxBuffer[i] = frame[i + 1];
     }
     rxRecvLen = len;
 
     NL_IndicateRequestReceived();
 }
 
-void NL_HandleFirstFrame(message m)
+void NL_HandleFirstFrame(byte frame[])
 {
     word len;
     byte i;
 
-    len = ((word)(m.byte(0) & 0x0F) << 8) | m.byte(1);
+    len = ((word)(frame[0] & 0x0F) << 8) | frame[1];
 
     if (len <= SF_MAX_DATA || len > ISOTP_MAX_LEN)
     {
@@ -232,7 +238,7 @@ void NL_HandleFirstFrame(message m)
 
     for (i = 0; i < FF_FIRST_DATA; i++)
     {
-        rxBuffer[rxRecvLen++] = m.byte(i + 2);
+        rxBuffer[rxRecvLen++] = frame[i + 2];
     }
 
     rxExpectedSN = 1;
@@ -244,7 +250,7 @@ void NL_HandleFirstFrame(message m)
     setTimer(rxCrTimer, N_CR_TIMEOUT_MS);
 }
 
-void NL_HandleConsecutiveFrame(message m)
+void NL_HandleConsecutiveFrame(byte frame[])
 {
     byte sn;
     byte i;
@@ -257,7 +263,7 @@ void NL_HandleConsecutiveFrame(message m)
         return;
     }
 
-    sn = m.byte(0) & 0x0F;
+    sn = frame[0] & 0x0F;
 
     if (sn != rxExpectedSN)
     {
@@ -273,7 +279,7 @@ void NL_HandleConsecutiveFrame(message m)
 
     for (i = 0; i < copyLen; i++)
     {
-        rxBuffer[rxRecvLen++] = m.byte(i + 1);
+        rxBuffer[rxRecvLen++] = frame[i + 1];
     }
 
     // ISO 15765-2: SN wraps around 1->2->...->15->0->1... (modulo 16)
@@ -413,7 +419,7 @@ void NL_SendFirstFrame()
     setTimer(txBsTimer, N_BS_TIMEOUT_MS);
 }
 
-void NL_HandleFlowControl(message m)
+void NL_HandleFlowControl(byte frame[])
 {
     byte fs;
 
@@ -423,14 +429,14 @@ void NL_HandleFlowControl(message m)
         return;
     }
 
-    fs = m.byte(0) & 0x0F;
+    fs = frame[0] & 0x0F;
     cancelTimer(txBsTimer);
 
     switch (fs)
     {
         case FC_FS_CTS:
-            txBlockSize     = m.byte(1);
-            txSTmin         = m.byte(2);
+            txBlockSize     = frame[1];
+            txSTmin         = frame[2];
             txFramesSinceFC = 0;
             txState         = NL_TX_SENDING_CF;
             NL_SendOneConsecutiveFrame();

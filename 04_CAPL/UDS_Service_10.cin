@@ -1,0 +1,68 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_10.cin
+
+  DiagnosticSessionControl (0x10) service implementation.
+
+  This module provides a simple UDS 0x10 handler suitable for the
+  existing application layer structure.
+
+  The Application Layer must:
+      - #include "UDS_Service_10.cin"
+      - call UDS_Service_10_Init() from on preStart
+      - call Handle_DiagnosticSessionControl(data, len) from the UDS request dispatcher
+===========================================================================*/
+
+variables
+{
+    const byte SID_DIAGNOSTIC_SESSION_CONTROL        = 0x10;
+
+    const byte SUBFUNC_DEFAULT_SESSION               = 0x01;
+    const byte SUBFUNC_EXTENDED_DIAGNOSTIC_SESSION   = 0x03;
+
+    byte currentSession;
+}
+
+void UDS_Service_10_Init()
+{
+    currentSession = SUBFUNC_DEFAULT_SESSION;
+}
+
+byte UDS_GetCurrentSession()
+{
+    return currentSession;
+}
+
+void Handle_DiagnosticSessionControl(byte data[], word len)
+{
+    byte subFunction;
+    byte responseSid;
+    byte resp[2];
+
+    if (len < 2)
+    {
+        AppLayer_SendNegativeResponse(SID_DIAGNOSTIC_SESSION_CONTROL,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    subFunction = data[1];
+
+    switch (subFunction)
+    {
+        case SUBFUNC_DEFAULT_SESSION:
+        case SUBFUNC_EXTENDED_DIAGNOSTIC_SESSION:
+            currentSession = subFunction;
+            responseSid = (byte)(SID_DIAGNOSTIC_SESSION_CONTROL + SID_POSITIVE_RESPONSE_OFFSET);
+            resp[0] = responseSid;
+            resp[1] = subFunction;
+            write("UDS_Service_10: DiagnosticSessionControl positive response sent (subFunction=0x%02X)", subFunction);
+            NetworkLayer_SendResponse(resp, 2);
+            break;
+
+        default:
+            AppLayer_SendNegativeResponse(SID_DIAGNOSTIC_SESSION_CONTROL,
+                                          NRC_SUBFUNCTION_NOT_SUPPORTED);
+            break;
+    }
+}

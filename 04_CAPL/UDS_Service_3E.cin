@@ -1,0 +1,76 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_3E.cin
+
+  TesterPresent (0x3E) UDS service implementation.
+
+  This module provides a lightweight TesterPresent handler compatible
+  with the existing service-oriented application layer style.
+
+  The Application Layer must:
+      - #include "UDS_Service_3E.cin"
+      - call UDS_Service_3E_Init() from on preStart
+      - call Handle_TesterPresent(data, len) from the UDS request dispatcher
+===========================================================================*/
+
+variables
+{
+    const byte SID_TESTER_PRESENT                   = 0x3E;
+
+    const byte SUBFUNC_KEEP_ALIVE                    = 0x00;
+    const byte SUBFUNC_SUPPRESS_POSITIVE_RESPONSE    = 0x80;
+
+    const dword TP_S3_TIMEOUT_MS                     = 3000;
+
+    msTimer tpS3Timer;
+}
+
+void UDS_Service_3E_Init()
+{
+    cancelTimer(tpS3Timer);
+}
+
+void Handle_TesterPresent(byte data[], word len)
+{
+    byte subFunction;
+    byte suppressResponse;
+    byte responseSid;
+    byte resp[2];
+
+    if (len < 2)
+    {
+        AppLayer_SendNegativeResponse(SID_TESTER_PRESENT,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    subFunction = data[1];
+    suppressResponse = (subFunction & SUBFUNC_SUPPRESS_POSITIVE_RESPONSE) != 0;
+
+    if ((subFunction & ~SUBFUNC_SUPPRESS_POSITIVE_RESPONSE) != SUBFUNC_KEEP_ALIVE)
+    {
+        AppLayer_SendNegativeResponse(SID_TESTER_PRESENT,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED);
+        return;
+    }
+
+    setTimer(tpS3Timer, TP_S3_TIMEOUT_MS);
+
+    if (suppressResponse)
+    {
+        write("UDS_Service_3E: TesterPresent received with suppressed response");
+        return;
+    }
+
+    responseSid = (byte)(SID_TESTER_PRESENT + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+    resp[1] = SUBFUNC_KEEP_ALIVE;
+
+    write("UDS_Service_3E: TesterPresent positive response sent (SID=0x%02X)", responseSid);
+    NetworkLayer_SendResponse(resp, 2);
+}
+
+on timer tpS3Timer
+{
+    write("UDS_Service_3E: S3 timer expired");
+}

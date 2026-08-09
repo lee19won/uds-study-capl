@@ -1,0 +1,46 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Common.cin
+
+  Common UDS constants shared by service modules.
+
+  This file is intended to centralize response offsets and negative response
+  code definitions so that duplicate values do not appear in individual
+  service implementation files.
+===========================================================================*/
+
+variables
+{
+    const byte SID_NEGATIVE_RESPONSE                  = 0x7F;
+    const byte SID_POSITIVE_RESPONSE_OFFSET           = 0x40;
+
+    const byte NRC_SERVICE_NOT_SUPPORTED              = 0x11;
+    const byte NRC_SUBFUNCTION_NOT_SUPPORTED          = 0x12;
+    const byte NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT = 0x13;
+    const byte NRC_CONDITIONS_NOT_CORRECT             = 0x22;
+    const byte NRC_REQUEST_OUT_OF_RANGE               = 0x31;
+    const byte NRC_SECURITY_ACCESS_DENIED             = 0x33;
+    const byte NRC_REQUEST_CORRECTLY_RECEIVED_PENDING = 0x78;
+    const byte NRC_SERVICE_NOT_SUPPORTED_IN_SESSION   = 0x7F;
+}
+
+// ===========================================================================
+// Helper: send a negative response  ( 0x7F <SID> <NRC> )
+// ===========================================================================
+void UDS_SendNegativeResponse(byte sid, byte nrc)
+{
+    byte resp[3];
+
+    resp[0] = SID_NEGATIVE_RESPONSE;
+    resp[1] = sid;
+    resp[2] = nrc;
+
+    write("UDS_Common: Negative response 0x7F 0x%02X 0x%02X", sid, nrc);
+    NetworkLayer_SendResponse(resp, 3);
+}
+
+// Returns 1 if the current session matches the required session.
+byte UDS_IsSessionAllowed(byte requiredSession)
+{
+    return (UDS_GetCurrentSession() == requiredSession) ? 1 : 0;
+}

@@ -4,16 +4,10 @@
 
   SBCM ECU Simulator - Main Node (Application Layer)
   --------------------------------------------------------------------------
-  This file demonstrates how to use NetworkLayer_API.cin.
+  This file demonstrates how to use the Network Layer and UDS service modules.
 
-  At this stage the Application Layer is only a skeleton: every incoming
-  request is answered with a negative response, NRC 0x11 (serviceNotSupported).
-
-  Next step: implement the actual UDS services inside
-  AppLayer_OnDiagRequestReceived(), e.g.
-      0x10 DiagnosticSessionControl
-      0x22 ReadDataByIdentifier
-      0x19 ReadDTCInformation
+  The Application Layer implements a simple request dispatcher that forwards
+  supported service IDs to dedicated UDS service handlers.
 
   ENCODING:
       This file is intentionally pure ASCII (no localized characters) so that
@@ -22,21 +16,20 @@
 
 includes
 {
+    #include "UDS_Common.cin"
     #include "NetworkLayer_API.cin"
+    #include "UDS_Service_10.cin"
+    #include "UDS_Service_3E.cin"
 }
 
 variables
 {
-    // ---- Negative Response Codes (subset) ----
-    const byte NRC_SERVICE_NOT_SUPPORTED = 0x11;
-
-    const byte SID_NEGATIVE_RESPONSE = 0x7F;
 }
 
 on preStart
 {
-    NetworkLayer_Init();
-    write("SBCM ECU Simulator: Network Layer initialized. Waiting for requests on 0x7B0 ...");
+    UDS_SessionInit();
+    write("SBCM ECU Simulator: UDS services initialized. Waiting for requests on 0x7B0 ...");
 }
 
 // ===========================================================================
@@ -51,16 +44,36 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
 
     write("AppLayer: UDS request received (len=%d, SID=0x%02X)", len, sid);
 
-    // TODO: replace with the real service dispatcher, for example
-    //   switch (sid)
-    //   {
-    //       case 0x10: Handle_DiagnosticSessionControl(data, len); break;
-    //       case 0x22: Handle_ReadDataByIdentifier(data, len);     break;
-    //       case 0x19: Handle_ReadDTCInformation(data, len);       break;
-    //       ...
-    //   }
+    switch (sid)
+    {
+        case 0x10:
+            UDS_Handle_DiagnosticSessionControl(data, len);
+            break;
 
-    AppLayer_SendNegativeResponse(sid, NRC_SERVICE_NOT_SUPPORTED);
+        case 0x3E:
+            UDS_Handle_TesterPresent(data, len);
+            break;
+
+        default:
+            AppLayer_SendNegativeResponse(sid, NRC_SERVICE_NOT_SUPPORTED);
+            break;
+    }
+}
+
+void UDS_SessionInit()
+{
+    UDS_Service_10_Init();
+    UDS_Service_3E_Init();
+}
+
+void UDS_Handle_DiagnosticSessionControl(byte data[], word len)
+{
+    Handle_DiagnosticSessionControl(data, len);
+}
+
+void UDS_Handle_TesterPresent(byte data[], word len)
+{
+    Handle_TesterPresent(data, len);
 }
 
 // ===========================================================================
@@ -68,13 +81,5 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
 // ===========================================================================
 void AppLayer_SendNegativeResponse(byte sid, byte nrc)
 {
-    byte resp[3];
-
-    resp[0] = SID_NEGATIVE_RESPONSE;
-    resp[1] = sid;
-    resp[2] = nrc;
-
-    write("AppLayer: Negative response 0x7F 0x%02X 0x%02X", sid, nrc);
-
-    NetworkLayer_SendResponse(resp, 3);
+    UDS_SendNegativeResponse(sid, nrc);
 }
