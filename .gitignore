@@ -51,3 +51,15 @@ Report/
 Thumbs.db
 desktop.ini
 $RECYCLE.BIN/
+#===========================================
+# Claude Code / Cowork local session config
+#===========================================
+.claude/
+
+# Microsoft Office lock files
+~$*.doc*
+~$*.xls*
+~$*.ppt*
+
+# Manual cleanup staging area (contents are meant to be deleted by hand)
+_to_delete/

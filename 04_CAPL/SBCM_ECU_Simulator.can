@@ -13,6 +13,27 @@
       This file is intentionally pure ASCII (no localized characters) so that
       it is immune to code page issues between CANoe, Git and text editors.
 ===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-07-28    lee.sungwon@slworld.com    Initial implementation - Network
+                                            Layer / Application Layer
+                                            integration structure, SID
+                                            dispatcher
+                                            (AppLayer_OnDiagRequestReceived),
+                                            0x10/0x3E service wiring
+  2026-07-30    lee.sungwon@slworld.com    Wired up the new 0x22
+                                            ReadDataByIdentifier service
+                                            (dispatcher case, UDS_SessionInit
+                                            call)
+  2026-08-10    lee.sungwon@slworld.com    Added the missing NetworkLayer_Init()
+                                            call in on preStart (documented as
+                                            mandatory but never actually
+                                            invoked - fixed)
+-----------------------------------------------------------------------------*/
 
 includes
 {
@@ -20,6 +41,7 @@ includes
     #include "NetworkLayer_API.cin"
     #include "UDS_Service_10.cin"
     #include "UDS_Service_3E.cin"
+    #include "UDS_Service_22.cin"
 }
 
 variables
@@ -28,6 +50,7 @@ variables
 
 on preStart
 {
+    NetworkLayer_Init();
     UDS_SessionInit();
     write("SBCM ECU Simulator: UDS services initialized. Waiting for requests on 0x7B0 ...");
 }
@@ -54,6 +77,10 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
             UDS_Handle_TesterPresent(data, len);
             break;
 
+        case 0x22:
+            UDS_Handle_ReadDataByIdentifier(data, len);
+            break;
+
         default:
             AppLayer_SendNegativeResponse(sid, NRC_SERVICE_NOT_SUPPORTED);
             break;
@@ -64,6 +91,7 @@ void UDS_SessionInit()
 {
     UDS_Service_10_Init();
     UDS_Service_3E_Init();
+    UDS_Service_22_Init();
 }
 
 void UDS_Handle_DiagnosticSessionControl(byte data[], word len)
@@ -74,6 +102,11 @@ void UDS_Handle_DiagnosticSessionControl(byte data[], word len)
 void UDS_Handle_TesterPresent(byte data[], word len)
 {
     Handle_TesterPresent(data, len);
+}
+
+void UDS_Handle_ReadDataByIdentifier(byte data[], word len)
+{
+    Handle_ReadDataByIdentifier(data, len);
 }
 
 // ===========================================================================

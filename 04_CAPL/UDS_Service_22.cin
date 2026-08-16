@@ -1,0 +1,177 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_22.cin
+
+  ReadDataByIdentifier (0x22) UDS service implementation.
+
+  This module returns a small, fixed set of sample DIDs for study purposes,
+  based on the following spec table:
+
+      DID    Name                                  Len     Type    Example
+      0xF100 DDS DataBase Version Number            #4~#11  ASCII   "26.06.18"
+      0xF1B1 ECUSoftwareUNIT1VersionDataIdentifier   #4~#8   ASCII   "26610"
+      0xF197 System Name Data                       #4~#11  ASCII   "SBCM"
+
+  The Application Layer must:
+      - #include "UDS_Service_22.cin"
+      - call UDS_Service_22_Init() from on preStart (e.g. via UDS_SessionInit())
+      - call Handle_ReadDataByIdentifier(data, len) from the UDS request dispatcher
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-07-30    lee.sungwon@slworld.com    Initial implementation - 0x22
+                                            ReadDataByIdentifier, started with
+                                            a small set of standard sample
+                                            DIDs
+  2026-07-31    lee.sungwon@slworld.com    Fixed a CAPL compile error (array
+                                            brace-initializers are not
+                                            supported inside a variables
+                                            block); switched to per-element
+                                            assignment in Init()
+  2026-08-03    lee.sungwon@slworld.com    Replaced the supported DIDs with
+                                            F100/F1B1/F197, each returning its
+                                            specified fixed value
+                                            ("26.06.18" / "26610" / "SBCM")
+  2026-08-16    lee.sungwon@slworld.com    Applied the ISO 14229-1 Figure
+                                            5/Figure 15 NRC priority order
+                                            (service-supported-in-session
+                                            check -> length check ->
+                                            DID-supported check)
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_READ_DATA_BY_IDENTIFIER = 0x22;
+
+    // ---- Supported Data Identifiers (DID) ----
+    const word DID_F100 = 0xF100; // DDS DataBase Version Number
+    const word DID_F1B1 = 0xF1B1; // ECUSoftwareUNIT1VersionDataIdentifier
+    const word DID_F197 = 0xF197; // System Name Data
+
+    // ---- Fixed sample data returned for each supported DID ----
+    // NOTE: CAPL does not allow brace-initializer lists ( = {...} ) for
+    // arrays in the "variables" block, so these are declared here and
+    // filled element-by-element in UDS_Service_22_Init() below.
+    const byte F100_LEN = 8;
+    byte F100_DATA[F100_LEN];   // "26.06.18"
+
+    const byte F1B1_LEN = 5;
+    byte F1B1_DATA[F1B1_LEN];   // "26610"
+
+    const byte F197_LEN = 4;
+    byte F197_DATA[F197_LEN];   // "SBCM"
+}
+
+// ===========================================================================
+// Must be called once from the Application Layer "on preStart"
+// (e.g. from UDS_SessionInit()) before any 0x22 request is handled.
+// ===========================================================================
+void UDS_Service_22_Init()
+{
+    // 0xF100 : "26.06.18"
+    F100_DATA[0] = '2';
+    F100_DATA[1] = '6';
+    F100_DATA[2] = '.';
+    F100_DATA[3] = '0';
+    F100_DATA[4] = '6';
+    F100_DATA[5] = '.';
+    F100_DATA[6] = '1';
+    F100_DATA[7] = '8';
+
+    // 0xF1B1 : "26610"
+    F1B1_DATA[0] = '2';
+    F1B1_DATA[1] = '6';
+    F1B1_DATA[2] = '6';
+    F1B1_DATA[3] = '1';
+    F1B1_DATA[4] = '0';
+
+    // 0xF197 : "SBCM"
+    F197_DATA[0] = 'S';
+    F197_DATA[1] = 'B';
+    F197_DATA[2] = 'C';
+    F197_DATA[3] = 'M';
+}
+
+// NRC priority order for a service without a sub-function follows ISO
+// 14229-1 Figure 5 (steps 1-2, general) then Figure 15 / 10.2.4 (the
+// service-specific evaluation sequence for ReadDataByIdentifier). This
+// simulator only ever accepts exactly one DID per request, so Figure 15's
+// "loop (multiple DIDs)" and its length-exceeded check (NRC 0x14) collapse
+// to the single-DID case below; "SID supported?" (NRC 0x11) is already
+// handled by the caller's dispatch switch before this function is reached.
+void Handle_ReadDataByIdentifier(byte data[], word len)
+{
+    word did;
+    byte resp[32];
+    byte i;
+    byte respLen;
+
+    // Figure 5 step 2: SID supported in the active session?
+    if (!UDS_IsServiceSupportedInSession())
+    {
+        AppLayer_SendNegativeResponse(SID_READ_DATA_BY_IDENTIFIER,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Figure 15 steps 1-2: minimum length check (SI + DID = 3 bytes) and
+    // maximum length check (this simulator supports exactly one DID per
+    // request, so min == max == 3).
+    if (len != 3)
+    {
+        AppLayer_SendNegativeResponse(SID_READ_DATA_BY_IDENTIFIER,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    did = ((word)data[1] << 8) | data[2];
+
+    resp[0] = (byte)(SID_READ_DATA_BY_IDENTIFIER + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[1] = data[1];
+    resp[2] = data[2];
+    respLen = 3;
+
+    // Figure 15: "DID#n support service 0x22 in active session?" / "at least
+    // one DID is supported in the active session?" -> NO -> NRC 0x31 (ROOR).
+    // None of these DIDs are secured (see Table 23 footnote b), so no
+    // security (NRC 0x33) or condition (NRC 0x22) check applies here.
+    switch (did)
+    {
+        case DID_F100:
+            for (i = 0; i < F100_LEN; i++)
+            {
+                resp[respLen + i] = F100_DATA[i];
+            }
+            respLen = (byte)(respLen + F100_LEN);
+            break;
+
+        case DID_F1B1:
+            for (i = 0; i < F1B1_LEN; i++)
+            {
+                resp[respLen + i] = F1B1_DATA[i];
+            }
+            respLen = (byte)(respLen + F1B1_LEN);
+            break;
+
+        case DID_F197:
+            for (i = 0; i < F197_LEN; i++)
+            {
+                resp[respLen + i] = F197_DATA[i];
+            }
+            respLen = (byte)(respLen + F197_LEN);
+            break;
+
+        default:
+            write("UDS_Service_22: Unsupported DID (0x%04X)", did);
+            AppLayer_SendNegativeResponse(SID_READ_DATA_BY_IDENTIFIER,
+                                          NRC_REQUEST_OUT_OF_RANGE);
+            return;
+    }
+
+    write("UDS_Service_22: ReadDataByIdentifier positive response sent (DID=0x%04X, len=%d)", did, respLen);
+    NetworkLayer_SendResponse(resp, respLen);
+}

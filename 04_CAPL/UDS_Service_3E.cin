@@ -12,6 +12,23 @@
       - call UDS_Service_3E_Init() from on preStart
       - call Handle_TesterPresent(data, len) from the UDS request dispatcher
 ===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-07-28    lee.sungwon@slworld.com    Initial implementation - 0x3E
+                                            TesterPresent, S3 timer
+                                            definition
+  2026-08-10    lee.sungwon@slworld.com    Tightened the length check
+                                            len<2 -> len!=2; S3 timer expiry
+                                            now calls UDS_SetCurrentSession()
+                                            to actually revert to the Default
+                                            Session (previously only logged)
+  2026-08-16    lee.sungwon@slworld.com    Applied the ISO 14229-1 Figure 5/6
+                                            NRC priority order
+-----------------------------------------------------------------------------*/
 
 variables
 {
@@ -30,6 +47,9 @@ void UDS_Service_3E_Init()
     cancelTimer(tpS3Timer);
 }
 
+// NRC priority order per ISO 14229-1 Figure 5 / Figure 6 (see UDS_Common.cin
+// for the full chain). "SID supported?" (NRC 0x11) is already handled by the
+// caller's dispatch switch before this function is reached.
 void Handle_TesterPresent(byte data[], word len)
 {
     byte subFunction;
@@ -37,7 +57,16 @@ void Handle_TesterPresent(byte data[], word len)
     byte responseSid;
     byte resp[2];
 
-    if (len < 2)
+    // Figure 5 step 2: SID supported in the active session?
+    if (!UDS_IsServiceSupportedInSession())
+    {
+        AppLayer_SendNegativeResponse(SID_TESTER_PRESENT,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Figure 6 step 4: minimum length check
+    if (len != 2)
     {
         AppLayer_SendNegativeResponse(SID_TESTER_PRESENT,
                                       NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
@@ -47,6 +76,7 @@ void Handle_TesterPresent(byte data[], word len)
     subFunction = data[1];
     suppressResponse = (subFunction & SUBFUNC_SUPPRESS_POSITIVE_RESPONSE) != 0;
 
+    // Figure 6 step 5: sub-function supported at all?
     if ((subFunction & ~SUBFUNC_SUPPRESS_POSITIVE_RESPONSE) != SUBFUNC_KEEP_ALIVE)
     {
         AppLayer_SendNegativeResponse(SID_TESTER_PRESENT,
@@ -54,6 +84,15 @@ void Handle_TesterPresent(byte data[], word len)
         return;
     }
 
+    // Figure 6 step 6: sub-function supported in the active session?
+    if (!UDS_IsSubFunctionSupportedInSession())
+    {
+        AppLayer_SendNegativeResponse(SID_TESTER_PRESENT,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Figure 6 step 7: specific SID checks / execute service
     setTimer(tpS3Timer, TP_S3_TIMEOUT_MS);
 
     if (suppressResponse)
@@ -72,5 +111,6 @@ void Handle_TesterPresent(byte data[], word len)
 
 on timer tpS3Timer
 {
-    write("UDS_Service_3E: S3 timer expired");
+    write("UDS_Service_3E: S3 timer expired - reverting to Default Session");
+    UDS_SetCurrentSession(SUBFUNC_DEFAULT_SESSION);
 }

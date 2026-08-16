@@ -8,6 +8,38 @@
   code definitions so that duplicate values do not appear in individual
   service implementation files.
 ===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-07-28    lee.sungwon@slworld.com    Initial implementation - SID/NRC
+                                            common constants,
+                                            UDS_SendNegativeResponse(),
+                                            UDS_IsSessionAllowed()
+  2026-08-10    lee.sungwon@slworld.com    Changed
+                                            NRC_SERVICE_NOT_SUPPORTED_IN_SESSION
+                                            from 0x7F to 0x7E (judgment at the
+                                            time; later found to be incorrect)
+  2026-08-16    lee.sungwon@slworld.com    Cross-checked against the ISO
+                                            14229-1:2013 source (Figure 5/6,
+                                            Table 4/6, Annex A.1) and found
+                                            the previous change was backwards
+                                            (SNSIAS=0x7F, SFNSIAS=0x7E);
+                                            reverted
+                                            NRC_SERVICE_NOT_SUPPORTED_IN_SESSION
+                                            to 0x7F, added
+                                            NRC_SUBFUNCTION_NOT_SUPPORTED_IN_
+                                            SESSION (0x7E), added NRC-priority
+                                            helper functions
+                                            (UDS_IsServiceSupportedInSession /
+                                            UDS_IsSubFunctionSupportedInSession)
+  2026-08-16    lee.sungwon@slworld.com    Added this revision-history header
+                                            (English) to all CAPL files; a new
+                                            entry will be appended here for
+                                            every future CAPL change
+-----------------------------------------------------------------------------*/
 
 variables
 {
@@ -21,7 +53,17 @@ variables
     const byte NRC_REQUEST_OUT_OF_RANGE               = 0x31;
     const byte NRC_SECURITY_ACCESS_DENIED             = 0x33;
     const byte NRC_REQUEST_CORRECTLY_RECEIVED_PENDING = 0x78;
-    const byte NRC_SERVICE_NOT_SUPPORTED_IN_SESSION   = 0x7F;
+
+    // ISO 14229-1 Annex A.1 (Table A.1) defines these two distinct codes:
+    //   0x7E = sub-functionNotSupportedInActiveSession (SFNSIAS)
+    //   0x7F = serviceNotSupportedInActiveSession      (SNSIAS)
+    // NOTE: an earlier revision of this file had these two values swapped
+    // (0x7E was used for the service-level check). That was corrected after
+    // re-deriving both values directly from the uploaded ISO 14229-1:2013
+    // spec (Figure 5, Figure 6, Table 4, Table 6 and Annex A.1 all agree on
+    // the mapping above) rather than from general recollection.
+    const byte NRC_SERVICE_NOT_SUPPORTED_IN_SESSION      = 0x7F; // SNSIAS
+    const byte NRC_SUBFUNCTION_NOT_SUPPORTED_IN_SESSION  = 0x7E; // SFNSIAS
 }
 
 // ===========================================================================
@@ -43,4 +85,51 @@ void UDS_SendNegativeResponse(byte sid, byte nrc)
 byte UDS_IsSessionAllowed(byte requiredSession)
 {
     return (UDS_GetCurrentSession() == requiredSession) ? 1 : 0;
+}
+
+// ===========================================================================
+// NRC priority / error-checking order
+// ===========================================================================
+// ISO 14229-1:2013, 7.5 "Server response implementation rules" mandates a
+// fixed order in which a server must validate an incoming request before it
+// may execute the service. The mandatory steps relevant to this simulator
+// (server-busy and manufacturer-specific checks are not implemented) are:
+//
+//   Figure 5 (7.5.2, general -- applies to every SID):
+//     1. SID supported?                         -> NRC 0x11 (SNS)
+//     2. SID supported in the active session?    -> NRC 0x7F (SNSIAS)
+//     3. (services with a sub-function continue into Figure 6 below;
+//         services without one, e.g. 0x22, go straight to their own
+//         "specific SID checks", see UDS_Service_22.cin / Figure 15)
+//
+//   Figure 6 (7.5.3.1, only for services WITH a sub-function -- 0x10, 0x3E):
+//     4. minimum length check                    -> NRC 0x13 (IMLOIF)
+//     5. sub-function supported at all?           -> NRC 0x12 (SFNS)
+//     6. sub-function supported in the active
+//        session?                                -> NRC 0x7E (SFNSIAS)
+//     7. specific SID checks / execute service
+//
+// Step 1 is implemented by the SID dispatch switch in
+// SBCM_ECU_Simulator.can (AppLayer_OnDiagRequestReceived). Steps 2-7 are
+// implemented, in this exact order, inside each service's Handle_...()
+// function using the two helpers below plus the service's own checks.
+//
+// UDS_IsServiceSupportedInSession() / UDS_IsSubFunctionSupportedInSession()
+// currently always return "supported": per Table 23, DiagnosticSessionControl
+// (0x10), TesterPresent (0x3E) and ReadDataByIdentifier (0x22) are all valid
+// in both the defaultSession and every non-default session, and neither
+// diagnosticSessionType (0x10) nor zeroSubFunction (0x3E) is session-gated.
+// The hooks exist so a future session-restricted service/sub-function can be
+// added at the correct point in the chain without re-deriving this ordering.
+
+// Step 2 of Figure 5: "SID supported in active session?"
+byte UDS_IsServiceSupportedInSession()
+{
+    return 1;
+}
+
+// Step 6 of Figure 6: "sub-function supported in active session for the SID?"
+byte UDS_IsSubFunctionSupportedInSession()
+{
+    return 1;
 }

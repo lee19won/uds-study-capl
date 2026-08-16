@@ -4,18 +4,9 @@
 
   SBCM ECU Simulator - Network Layer (ISO 15765-2 / ISO-TP)
   --------------------------------------------------------------------------
-  Database: SBCM_XX_CANFD_DataBase_v0_1.dbc
+  Database: 02_DBC/SBCM_XX_CANFD_DataBase*.dbc
       SBCM_Diag_Req  (0x7B0, 1968) : Tester(OBD) -> SBCM  (Request / FlowControl)
       SBCM_Diag_Resp (0x7B8, 1976) : SBCM -> Tester(OBD)  (Response / FlowControl)
-
-  NOTE ON THE DBC:
-      In DBC v0.1 the transmitter nodes of the two messages are swapped.
-      (SBCM_Diag_Req is declared with Tx = SBCM, SBCM_Diag_Resp with Tx = OBD)
-      This does not affect the "on message" trigger behaviour, but it does not
-      match the usual UDS physical addressing convention (Tester->ECU / ECU->
-      Tester). Fixing the DBC is recommended.
-      This module is implemented according to the intended behaviour:
-      SBCM receives on 0x7B0 and responds on 0x7B8.
 
   SCOPE:
       This module implements ONLY the ISO-TP segmentation and reassembly on
@@ -39,6 +30,30 @@
       This file is intentionally pure ASCII (no localized characters) so that
       it is immune to code page issues between CANoe, Git and text editors.
 ===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-07-28    lee.sungwon@slworld.com    Initial implementation - ISO-TP
+                                            segmentation/reassembly
+                                            (SF/FF/CF/FC), N_Bs/N_Cr timeout
+                                            handling
+  2026-08-05    lee.sungwon@slworld.com    Corrected the DBC Tx-node comment
+                                            description to match the actual
+                                            DBC file (first pass)
+  2026-08-10    lee.sungwon@slworld.com    Added an NL_AbortReception() call
+                                            at the start of NL_HandleFirstFrame()
+                                            for consistency with
+                                            NL_HandleSingleFrame()
+  2026-08-10    lee.sungwon@slworld.com    Removed a stale comment claiming
+                                            the DBC Tx nodes were swapped -
+                                            verified false against the actual
+                                            DBC file; generalized the Database
+                                            header comment to a
+                                            version-independent path
+-----------------------------------------------------------------------------*/
 
 includes
 {
@@ -232,6 +247,7 @@ void NL_HandleFirstFrame(byte frame[])
     {
         write("NetworkLayer(RX): FF received while reassembling - aborting previous reception");
     }
+    NL_AbortReception();
 
     rxTotalLen = len;
     rxRecvLen  = 0;

@@ -129,9 +129,9 @@ chore: 설정 / 잡무
 ## 진행 계획
 
 - [x] Network Layer (ISO-TP) 구현
-- [ ] 0x10 DiagnosticSessionControl
-- [ ] 0x3E TesterPresent (S3 타이머)
-- [ ] 0x22 ReadDataByIdentifier
+- [x] 0x10 DiagnosticSessionControl
+- [x] 0x3E TesterPresent (S3 타이머)
+- [x] 0x22 ReadDataByIdentifier
 - [ ] 0x27 SecurityAccess
 - [ ] 0x19 ReadDTCInformation
 - [ ] 0x2E WriteDataByIdentifier
