@@ -1,9 +1,6 @@
-# Local build artifacts for the SecurityAccess Seed & Key DLL.
-# Source (.cpp/.h), build scripts, self-test, and the Python cross-check
-# are tracked; the compiled binary and intermediate build outputs are not
-# (build it locally with build_mingw.bat or build_msvc.bat - see README.md).
-*.dll
-*.lib
+# The compiled SecurityAccessDLL.dll/.lib ARE tracked (committed on request,
+# built with build_mingw.bat / MinGW-w64, confirmed working live in CANoe).
+# Only leftover intermediate build files are ignored here.
 *.exp
 *.obj
 *.pdb
