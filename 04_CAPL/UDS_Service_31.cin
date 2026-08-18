@@ -22,16 +22,26 @@
   verify, so "start" and "finish" happen in the same request/response
   cycle) -> requesting 0x02/0x03 gets NRC 0x12 (subFunctionNotSupported).
 
-  Neither routine's optional routineControlOptionRecord is implemented
-  (Table 8-47/8-49's MemoryArea / SWUnitMemoryArea parameters are
-  Conditional on OTA / multi-SWUnit support, which this simulator does
-  not have) - only the bare 4-byte request/response shown in
-  ES95486-02's own worked example is accepted:
-      Request:  31 01 FF 00   (Table 10-11: RoutineControl (eraseMemory))
-      Response: 71 01 FF 00
-  This project's other worked-example-driven services (UDS_Service_2E/
-  2F.cin) apply the same "match the concrete worked example over the
-  generic optional-parameter grammar" simplification.
+  checkProgrammingDependencies (0xFF01) still has no routineControlOptionRecord
+  - only the bare 4-byte request/response shown in ES95486-02's own worked
+  example is accepted:
+      Request:  31 01 FF 01
+      Response: 71 01 FF 01
+
+  eraseMemory (0xFF00), as of 2026-08-19, DOES implement a
+  routineControlOptionRecord / routineStatusRecord - this project's
+  real-world reference spec (NE1aW_SBCM_Diagnostic_Data_251104.xlsx, "RID
+  FF00" sheet) documents a concrete SWUnitMemoryArea parameter for this
+  exact routine (not left abstract like ES95486-02 Table 8-47's generic
+  MemoryArea):
+      Request:  31 01 FF 00 <SWUnitMemoryArea 2 byte>            (6 bytes)
+      Response: 71 01 FF 00 <SWUnitMemoryArea 2 byte><ErasedPartitionArea 1 byte> (7 bytes)
+  This simulator echoes the requested SWUnitMemoryArea back unchanged as
+  Out_SWUnitMemoryArea, and always reports ErasedPartitionArea=0x01
+  (success) - there is no real flash memory or partition table to erase,
+  so this is a fixed simulated-success value, documented as an intentional
+  simplification (same spirit as checkProgrammingDependencies always
+  succeeding, below).
 
   IMPORTANT session/security design note: ES95486-02 Table 3-1 marks
   RoutineControl (31 hex) with the Circle symbol ("Specific sub-function
@@ -75,6 +85,20 @@
                                             reprogramming sequence
                                             implementation (see also
                                             UDS_Service_34_35_36_37.cin).
+  2026-08-19    lee.sungwon@slworld.com    eraseMemory (0xFF00) now
+                                            implements a real
+                                            routineControlOptionRecord
+                                            (SWUnitMemoryArea, 2 byte
+                                            request) / routineStatusRecord
+                                            (SWUnitMemoryArea +
+                                            ErasedPartitionArea, 3 byte
+                                            response), per this project's
+                                            real-world reference spec's
+                                            "RID FF00" sheet.
+                                            checkProgrammingDependencies
+                                            (0xFF01) is unchanged (still
+                                            the bare ES95486-02 Table 10-11
+                                            worked-example format).
 -----------------------------------------------------------------------------*/
 
 variables
@@ -92,8 +116,18 @@ variables
     const word RID_ERASE_MEMORY                   = 0xFF00;
     const word RID_CHECK_PROGRAMMING_DEPENDENCIES = 0xFF01;
 
-    // Request/response length: SID + routineControlType + routineIdentifier(2)
+    // Minimum/checkProgrammingDependencies request+response length:
+    // SID + routineControlType + routineIdentifier(2) = 4 bytes (no
+    // routineControlOptionRecord/routineStatusRecord for this routine).
     const byte RC_REQ_LEN = 4;
+
+    // eraseMemory (0xFF00)-specific lengths, per the reference spec's "RID
+    // FF00" sheet: request adds a 2-byte SWUnitMemoryArea
+    // routineControlOptionRecord; response adds a 3-byte routineStatusRecord
+    // (SWUnitMemoryArea echo + 1-byte ErasedPartitionArea).
+    const byte RC_ERASE_REQ_LEN  = RC_REQ_LEN + 2; // 6
+    const byte RC_ERASE_RESP_LEN = RC_REQ_LEN + 3; // 7
+    const byte ERASED_PARTITION_AREA_OK = 0x01;    // fixed simulated-success value
 }
 
 // NRC priority order per ISO 14229-1 Figure 5 (see UDS_Common.cin for the
@@ -106,7 +140,9 @@ void Handle_RoutineControl(byte data[], word len)
     byte routineControlType;
     word rid;
     byte responseSid;
-    byte resp[4];
+    byte resp[7]; // sized for RID_ERASE_MEMORY's longer response (RC_ERASE_RESP_LEN)
+    byte respLen;
+    word swUnitMemoryArea;
 
     // Figure 8-1 Key 1: minimum length check (need at least SID +
     // routineControlType + routineIdentifier to identify the request).
@@ -151,13 +187,27 @@ void Handle_RoutineControl(byte data[], word len)
         return;
     }
 
-    // Exact length check: this simulator does not support a
-    // routineControlOptionRecord for either routine (see file header).
-    if (len != RC_REQ_LEN)
+    // Exact length check: RID-dependent since 2026-08-19 - eraseMemory now
+    // requires a 2-byte SWUnitMemoryArea routineControlOptionRecord (real
+    // reference spec, "RID FF00" sheet), while checkProgrammingDependencies
+    // still takes no parameters at all (see file header).
+    if (rid == RID_ERASE_MEMORY)
     {
-        AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
-                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
-        return;
+        if (len != RC_ERASE_REQ_LEN)
+        {
+            AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
+                                          NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+            return;
+        }
+    }
+    else // RID_CHECK_PROGRAMMING_DEPENDENCIES
+    {
+        if (len != RC_REQ_LEN)
+        {
+            AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
+                                          NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+            return;
+        }
     }
 
     // ES95486-02 8.1: both routines "have to be secured by respective ECU
@@ -170,6 +220,12 @@ void Handle_RoutineControl(byte data[], word len)
         return;
     }
 
+    responseSid = (byte)(SID_ROUTINE_CONTROL + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+    resp[1] = routineControlType;
+    resp[2] = data[2];
+    resp[3] = data[3];
+
     // ---- Execute ----
     if (rid == RID_ERASE_MEMORY)
     {
@@ -179,7 +235,20 @@ void Handle_RoutineControl(byte data[], word len)
         // real sequence (Table 10-2: eraseMemory always precedes the first
         // RequestDownload of the application software).
         TransferSession_Reset();
-        write("UDS_Service_31: eraseMemory (0xFF00) - simulated, transfer session reset");
+
+        // routineStatusRecord: Out_SWUnitMemoryArea echoes the requested
+        // In_SWUnitMemoryArea unchanged; Out_ErasedPartitionArea is a fixed
+        // simulated-success value (see file header - no real partition
+        // table exists to report on).
+        swUnitMemoryArea = ((word)data[4] << 8) | data[5];
+        resp[4] = data[4];
+        resp[5] = data[5];
+        resp[6] = ERASED_PARTITION_AREA_OK;
+        respLen = RC_ERASE_RESP_LEN;
+
+        write("UDS_Service_31: eraseMemory (0xFF00) - simulated, transfer session reset "
+              "(SWUnitMemoryArea=0x%04X, ErasedPartitionArea=0x%02X)",
+              swUnitMemoryArea, ERASED_PARTITION_AREA_OK);
     }
     else // RID_CHECK_PROGRAMMING_DEPENDENCIES
     {
@@ -188,15 +257,10 @@ void Handle_RoutineControl(byte data[], word len)
         // verify the downloaded software here and could fail with NRC 0x72
         // (generalProgrammingFailure) - documented as an intentional
         // simplification for a study project.
+        respLen = RC_REQ_LEN;
         write("UDS_Service_31: checkProgrammingDependencies (0xFF01) - simulated, always succeeds");
     }
 
-    responseSid = (byte)(SID_ROUTINE_CONTROL + SID_POSITIVE_RESPONSE_OFFSET);
-    resp[0] = responseSid;
-    resp[1] = routineControlType;
-    resp[2] = data[2];
-    resp[3] = data[3];
-
-    write("UDS_Service_31: RoutineControl positive response sent (RID=0x%04X)", rid);
-    NetworkLayer_SendResponse(resp, RC_REQ_LEN);
+    write("UDS_Service_31: RoutineControl positive response sent (RID=0x%04X, len=%d)", rid, respLen);
+    NetworkLayer_SendResponse(resp, respLen);
 }

@@ -5,24 +5,34 @@
   WriteDataByIdentifier (0x2E) UDS service implementation, per ES95486-02
   5.6 (Table 5-22 ~ 5-24) and Annex C.1.
 
-  Supported DID: 0xF198 RepairShopCodeOrTesterSerialNumberDataIdentifier
-  (Annex C.1: "This value shall be used to reference the repair shop code
-  or tester (client) serial number... Record data content and format
-  shall be server specific and defined by the vehicle manufacturer") - a
-  genuine ES95486-02 standard DID, chosen per project decision to add a
-  NEW writable sample DID distinct from the 3 existing read-only DIDs in
-  UDS_Service_22.cin (F100/F1B1/F197). This project fixes its length at
-  10 bytes ASCII (server-specific choice, since the spec leaves the
-  format open) and does NOT expose it via ReadDataByIdentifier (0x22) -
-  it is write-only in this simulator, matching how a repair-shop code is
-  typically set once during service and not read back diagnostically.
+  Supported DID: 0xC0DE "EOL Variant Coding" (2026-08-19: replaced the
+  original 0xF198 RepairShopCodeOrTesterSerialNumberDataIdentifier). F198
+  was a genuine ES95486-02 standard DID but does not appear anywhere in
+  this project's real-world reference spec
+  (NE1aW_SBCM_Diagnostic_Data_251104.xlsx, "$22 $2E DID" sheet); C0DE does,
+  and is a real R/W DID there:
+      - Default Session : Read only
+      - Programming Session : not supported ("-")
+      - Extended Session : Read/Write
+      - Write requires Security Level 9 in that spec's numbering, which
+        this project maps onto its own single implemented security level
+        (SecurityAccess_IsUnlocked(), ASK/Level2) - the same simplification
+        already applied to 0x31 RoutineControl's Level-9-gated routines.
+      - Data Length: 8 bytes, Type: HEX (not ASCII - unlike F198)
+  This module owns the write path and the underlying 8-byte storage;
+  UDS_Service_22.cin's ReadDataByIdentifier reads the same storage back via
+  EOLVariantCoding_CopyTo() below, so a value written here is visible on a
+  subsequent 0x22 request for the same DID (Default or Extended session).
 
-  ES95486-02 Table 3-1: WriteDataByIdentifier (2E hex) is X (not
-  supported) in the Default Session, Diamond (possible, SecurityAccess
-  required) in Programming/Extended/SafetySystem sessions, with Engine
-  Condition "Engine stop, IGN on" (same condition as ECUReset and
-  Programming Session entry - see VehicleCondition.cin /
-  UDS_IsEngineConditionOk(), reused here).
+  ES95486-02 Table 3-1 (SID-level, still applies): WriteDataByIdentifier
+  (2E hex) is X (not supported) in the Default Session, Diamond (possible,
+  SecurityAccess required) in Programming/Extended/SafetySystem sessions,
+  with Engine Condition "Engine stop, IGN on" (same condition as ECUReset
+  and Programming Session entry - see VehicleCondition.cin /
+  UDS_IsEngineConditionOk(), reused here). C0DE additionally narrows this
+  at the DID level: even though the SID itself is reachable in the
+  Programming Session, C0DE specifically is not writable there (only
+  Extended) - see Handle_WriteDataByIdentifier() below.
 
   The Application Layer must:
       - #include "UDS_Service_2E.cin"
@@ -45,42 +55,76 @@
                                             ES95486-02 10.2 reprogramming
                                             sequence implementation (see
                                             also UDS_Service_2F.cin).
+  2026-08-19    lee.sungwon@slworld.com    Replaced the invented write-only
+                                            DID 0xF198 with the real 0xC0DE
+                                            "EOL Variant Coding" DID from
+                                            this project's real-world
+                                            reference spec (NE1aW_SBCM_
+                                            Diagnostic_Data_251104.xlsx) -
+                                            now 8-byte HEX (not 10-byte
+                                            ASCII), writable in the Extended
+                                            session only (not Programming),
+                                            and exposed read-back via
+                                            EOLVariantCoding_CopyTo() for
+                                            UDS_Service_22.cin's 0x22
+                                            ReadDataByIdentifier to use.
 -----------------------------------------------------------------------------*/
 
 variables
 {
     const byte SID_WRITE_DATA_BY_IDENTIFIER = 0x2E;
 
-    // ---- Supported (writable) Data Identifier ----
-    const word DID_F198 = 0xF198; // RepairShopCodeOrTesterSerialNumberDataIdentifier
+    // ---- Supported (read/write) Data Identifier ----
+    // DID_C0DE and EOL_VARIANT_LEN are the canonical definitions of these
+    // two constants for the whole project - UDS_Service_22.cin's
+    // ReadDataByIdentifier references them by name (cross-file constant
+    // sharing, same pattern as UDS_Service_10.cin's SUBFUNC_* constants).
+    const word DID_C0DE = 0xC0DE; // EOL Variant Coding (real NE1aW SBCM spec DID)
 
-    // Project-defined fixed length for F198 in this simulator (the spec
-    // leaves format/length "server specific"). NOTE: CAPL does not allow
-    // brace-initializer lists for arrays in the "variables" block (see
-    // UDS_Service_22.cin's header comment for the same restriction), so
-    // the array is filled element-by-element in UDS_Service_2E_Init().
-    const byte F198_LEN = 10;
-    byte F198_DATA[F198_LEN];
+    // Length per the reference spec's "$22 $2E DID" sheet: 8 bytes, HEX.
+    // NOTE: CAPL does not allow brace-initializer lists for arrays in the
+    // "variables" block (see UDS_Service_22.cin's header comment for the
+    // same restriction), so the array is filled element-by-element in
+    // UDS_Service_2E_Init().
+    const byte EOL_VARIANT_LEN = 8;
+    byte EOL_VARIANT_DATA[EOL_VARIANT_LEN];
 
     // Minimum request length: SID + DID(2) + at least 1 dataRecord byte.
     const byte WDBI_MIN_REQ_LEN = 4;
-    // Exact request length this simulator accepts for F198 (SID + DID(2) +
-    // fixed 10-byte dataRecord).
-    const byte WDBI_F198_REQ_LEN = 3 + F198_LEN;
+    // Exact request length this simulator accepts for C0DE (SID + DID(2) +
+    // fixed 8-byte dataRecord).
+    const byte WDBI_C0DE_REQ_LEN = 3 + EOL_VARIANT_LEN;
 }
 
 // ===========================================================================
 // Must be called once from the Application Layer "on preStart"
 // (e.g. from UDS_SessionInit()) before any 0x2E request is handled.
-// Default value is 10 spaces (0x20) - "not yet programmed".
+// Default value is all-zero - "EOL variant not yet coded", a conventional
+// default for this kind of field since the reference spec does not define
+// a specific power-on default.
 // ===========================================================================
 void UDS_Service_2E_Init()
 {
     byte i;
 
-    for (i = 0; i < F198_LEN; i++)
+    for (i = 0; i < EOL_VARIANT_LEN; i++)
     {
-        F198_DATA[i] = ' ';
+        EOL_VARIANT_DATA[i] = 0x00;
+    }
+}
+
+// ===========================================================================
+// Public getter for UDS_Service_22.cin's ReadDataByIdentifier (DID 0xC0DE)
+// - copies the current 8-byte EOL Variant Coding value into the caller-
+// supplied buffer. Same cross-file "public getter" pattern already used by
+// UDS_Service_27.cin's SecurityAccess_IsUnlocked().
+// ===========================================================================
+void EOLVariantCoding_CopyTo(byte outBuf[])
+{
+    byte i;
+    for (i = 0; i < EOL_VARIANT_LEN; i++)
+    {
+        outBuf[i] = EOL_VARIANT_DATA[i];
     }
 }
 
@@ -129,9 +173,9 @@ void Handle_WriteDataByIdentifier(byte data[], word len)
     // Table 5-24, NRC 0x31 cause #1: "The dataIdentifier in the request
     // message is not supported in the server or the dataIdentifier is
     // supported for read only purpose (via ReadDataByIdentifier service)."
-    // This simulator's only writable DID is F198; F100/F1B1/F197 (read-only,
+    // This simulator's only writable DID is C0DE; F100/F1B1/F197 (read-only,
     // see UDS_Service_22.cin) and any other DID fall into this same cause.
-    if (did != DID_F198)
+    if (did != DID_C0DE)
     {
         write("UDS_Service_2E: Unsupported or read-only DID (0x%04X)", did);
         AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
@@ -139,9 +183,22 @@ void Handle_WriteDataByIdentifier(byte data[], word len)
         return;
     }
 
+    // Reference spec ("$22 $2E DID" sheet): C0DE's Programming-session
+    // column is "-" (not supported there) - only Extended supports write,
+    // even though the 0x2E SID itself is reachable in both Programming and
+    // Extended (checked above). Same DID-level-vs-SID-level distinction as
+    // UDS_Service_22.cin's read side for this DID.
+    if (UDS_GetCurrentSession() == SUBFUNC_PROGRAMMING_SESSION)
+    {
+        write("UDS_Service_2E: DID 0xC0DE is not writable in the Programming session (Extended only)");
+        AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
+                                      NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
     // Exact length check, now that the DID (and therefore its expected
     // dataRecord length) is known.
-    if (len != WDBI_F198_REQ_LEN)
+    if (len != WDBI_C0DE_REQ_LEN)
     {
         AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
                                       NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
@@ -158,9 +215,8 @@ void Handle_WriteDataByIdentifier(byte data[], word len)
         return;
     }
 
-    // ES95486-02 Table 3-1: F198 is only writable in a session where
-    // SecurityAccess has been unlocked (Diamond symbol, "security
-    // required").
+    // ES95486-02 Table 3-1 / reference spec Security Level 9: C0DE is only
+    // writable in a session where SecurityAccess has been unlocked.
     if (!SecurityAccess_IsUnlocked())
     {
         AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
@@ -168,10 +224,10 @@ void Handle_WriteDataByIdentifier(byte data[], word len)
         return;
     }
 
-    // Execute: write dataRecord into F198_DATA.
-    for (i = 0; i < F198_LEN; i++)
+    // Execute: write dataRecord into EOL_VARIANT_DATA.
+    for (i = 0; i < EOL_VARIANT_LEN; i++)
     {
-        F198_DATA[i] = data[3 + i];
+        EOL_VARIANT_DATA[i] = data[3 + i];
     }
 
     responseSid = (byte)(SID_WRITE_DATA_BY_IDENTIFIER + SID_POSITIVE_RESPONSE_OFFSET);

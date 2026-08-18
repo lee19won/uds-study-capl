@@ -9,9 +9,9 @@
   UDS_Service_14.cin, UDS_Service_19.cin, UDS_Service_22.cin,
   UDS_Service_27.cin, UDS_Service_28.cin, UDS_Service_2E.cin,
   UDS_Service_2F.cin, UDS_Service_31.cin, UDS_Service_34_35_36_37.cin,
-  UDS_Service_3E.cin, UDS_Service_85.cin): whenever a service is added or
-  its request/response format changes, this file must be updated to
-  match, in the same commit as the CAPL change.
+  UDS_Service_3E.cin, UDS_Service_85.cin, UDS_DTC_Store.cin): whenever a
+  service is added or its request/response format changes, this file must
+  be updated to match, in the same commit as the CAPL change.
 
   Schema note: this file's structure (ECU/NEGATIVE_RESPONSE_CODES/INSTANCE/
   REQUEST/RESPONSE/PARAMETER elements and attributes, and the "bitPos =
@@ -144,6 +144,54 @@
                                             reprogramming sequence uses, but
                                             they are not useful as a Console
                                             example.
+  2026-08-19    lee.sungwon@slworld.com    Updated 5 INSTANCEs to match CAPL
+                                            changes made after cross-checking
+                                            against a real-world production
+                                            diagnostic spec (NE1aW_SBCM_
+                                            Diagnostic_Data_251104.xlsx):
+                                            (1) ECUSoftwareUNIT1Version (0x22
+                                            F1B1) - data now 6 bytes "26.610"
+                                            (was 5-byte "26610"); (2)
+                                            WriteDataByIdentifierRepairShopCode
+                                            replaced with
+                                            WriteDataByIdentifierEOLVariantCoding
+                                            (0x2E, DID 0xC0DE "EOL Variant
+                                            Coding", 8-byte HEX, Extended
+                                            session only - was DID 0xF198,
+                                            10-byte ASCII), plus a new
+                                            ReadDataByIdentifierEOLVariantCoding
+                                            (0x22, same DID) INSTANCE for the
+                                            read-back path; (3)
+                                            ReadDTCInfoReportDTCByStatusMask/
+                                            ReadDTCInfoReportSupportedDTC
+                                            (0x19) - DTCNumber now 96 03 00
+                                            ("B160300", a real DTC) instead of
+                                            the invented B1 01 00; (4)
+                                            RoutineControlEraseMemory (0x31,
+                                            RID FF00) - added the real
+                                            SWUnitMemoryArea request parameter
+                                            and SWUnitMemoryArea/
+                                            ErasedPartitionArea response
+                                            parameters; (5)
+                                            RequestDownloadApplicationSoftware/
+                                            RequestUploadApplicationSoftware
+                                            (0x34/0x35) - added a comment
+                                            documenting that memoryAddress
+                                            0x001B67 is now the only value
+                                            accepted (NRC 0x70 otherwise);
+                                            the example value itself was
+                                            already 00 1B 67, unchanged. See
+                                            04_CAPL/UDS_Service_22.cin,
+                                            UDS_Service_2E.cin,
+                                            UDS_DTC_Store.cin,
+                                            UDS_Service_31.cin and
+                                            UDS_Service_34_35_36_37.cin for
+                                            the corresponding CAPL changes
+                                            (all dated 2026-08-19). No
+                                            NEGATIVE_RESPONSE_CODES changes
+                                            were needed - NRC 0x70 was
+                                            already present in the existing
+                                            table.
 -->
 <ECU protocol="UDS">
  <NEGATIVE_RESPONSE_CODES>
@@ -261,6 +309,11 @@
    <PARAMETER id="Data" bitPos="31" bitLen="64" type="asc" unit="" value="32 36 2E 30 36 2E 31 38" semantics="MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
+ <!-- 2026-08-19: Data is now 6-byte ASCII "26.610" (was 5-byte "26610") -
+      per this project's real-world reference spec's actual software
+      version string format (NE1aW_SBCM_Diagnostic_Data_251104.xlsx, "DID
+      F100_F1EF" sheet), which includes the decimal point - see
+      UDS_Service_22.cin's F1B1_LEN/F1B1_DATA. -->
  <INSTANCE id="ECUSoftwareUNIT1Version">
   <REQUEST>
    <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="22" semantics="SID CONST MOTOROLA" convId=""/>
@@ -269,7 +322,7 @@
   <RESPONSE>
    <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="62" semantics="SID CONST MOTOROLA" convId=""/>
    <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 B1" semantics="XID CONST MOTOROLA" convId=""/>
-   <PARAMETER id="Data" bitPos="31" bitLen="40" type="asc" unit="" value="32 36 36 31 30" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="Data" bitPos="31" bitLen="48" type="asc" unit="" value="32 36 2E 36 31 30" semantics="MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
  <INSTANCE id="SystemNameData">
@@ -330,7 +383,7 @@
    <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="59" semantics="SID CONST MOTOROLA" convId=""/>
    <PARAMETER id="reportType" bitPos="15" bitLen="8" type="none" unit="" value="02" semantics="XID CONST MOTOROLA" convId=""/>
    <PARAMETER id="DTCStatusAvailabilityMask" bitPos="23" bitLen="8" type="none" unit="" value="AF" semantics="MOTOROLA" convId=""/>
-   <PARAMETER id="DTCNumber" bitPos="31" bitLen="24" type="none" unit="" value="B1 01 00" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="DTCNumber" bitPos="31" bitLen="24" type="none" unit="" value="96 03 00" semantics="MOTOROLA" convId=""/>
    <PARAMETER id="statusOfDTC" bitPos="55" bitLen="8" type="none" unit="" value="AF" semantics="MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
@@ -343,7 +396,7 @@
    <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="59" semantics="SID CONST MOTOROLA" convId=""/>
    <PARAMETER id="reportType" bitPos="15" bitLen="8" type="none" unit="" value="0A" semantics="XID CONST MOTOROLA" convId=""/>
    <PARAMETER id="DTCStatusAvailabilityMask" bitPos="23" bitLen="8" type="none" unit="" value="AF" semantics="MOTOROLA" convId=""/>
-   <PARAMETER id="DTCNumber" bitPos="31" bitLen="24" type="none" unit="" value="B1 01 00" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="DTCNumber" bitPos="31" bitLen="24" type="none" unit="" value="96 03 00" semantics="MOTOROLA" convId=""/>
    <PARAMETER id="statusOfDTC" bitPos="55" bitLen="8" type="none" unit="" value="00" semantics="MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
@@ -372,18 +425,40 @@
    <PARAMETER id="controlType" bitPos="15" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
- <!-- dataRecord example value is the ASCII string "TESTER0001" (10 bytes,
-      matching UDS_Service_2E.cin's fixed F198_LEN) - a placeholder repair-
-      shop code, not a real value. -->
- <INSTANCE id="WriteDataByIdentifierRepairShopCode">
+ <!-- 2026-08-19: replaced WriteDataByIdentifierRepairShopCode (invented DID
+      0xF198, 10-byte ASCII) with the real DID 0xC0DE "EOL Variant Coding"
+      from this project's real-world reference spec (NE1aW_SBCM_Diagnostic_
+      Data_251104.xlsx, "$22 $2E DID" sheet) - 8-byte HEX, writable in the
+      Extended session only (not Programming), requires SecurityAccess to
+      be unlocked first - see UDS_Service_2E.cin. dataRecord example value
+      (01 02 03 04 05 06 07 08) is illustrative only, not a real coding
+      value. -->
+ <INSTANCE id="WriteDataByIdentifierEOLVariantCoding">
   <REQUEST>
    <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="2E" semantics="SID CONST MOTOROLA" convId=""/>
-   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 98" semantics="XID CONST MOTOROLA" convId=""/>
-   <PARAMETER id="dataRecord" bitPos="31" bitLen="80" type="asc" unit="" value="54 45 53 54 45 52 30 30 30 31" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="C0 DE" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataRecord" bitPos="31" bitLen="64" type="none" unit="" value="01 02 03 04 05 06 07 08" semantics="MOTOROLA" convId=""/>
   </REQUEST>
   <RESPONSE>
    <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="6E" semantics="SID CONST MOTOROLA" convId=""/>
-   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 98" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="C0 DE" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <!-- Read-back of the same DID via 0x22 ReadDataByIdentifier - readable in
+      the Default or Extended session (not Programming) - see
+      UDS_Service_22.cin's EOLVariantCoding_CopyTo() read path. Example
+      response value matches the WriteDataByIdentifierEOLVariantCoding
+      request above (illustrative - the actual value reflects whatever was
+      last written this measurement, or all-zero if never written). -->
+ <INSTANCE id="ReadDataByIdentifierEOLVariantCoding">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="22" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="C0 DE" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="62" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="C0 DE" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="Data" bitPos="31" bitLen="64" type="none" unit="" value="01 02 03 04 05 06 07 08" semantics="MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
  <!-- dataIdentifier F010 is a project-invented sample DID, NOT a real
@@ -427,20 +502,32 @@
    <PARAMETER id="controlState" bitPos="39" bitLen="8" type="none" unit="" value="01" semantics="MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
- <!-- routineIdentifier FF00/FF01, plain 4-byte request/response with no
-      routineControlOptionRecord - matches ES95486-02 Table 10-11's worked
-      example (31 01 FF 00 / 71 01 FF 00) exactly. Both routines require
-      SecurityAccess to be unlocked first (UDS_Service_31.cin). -->
+ <!-- routineIdentifier FF01 (checkProgrammingDependencies, next INSTANCE)
+      is a plain 4-byte request/response with no routineControlOptionRecord
+      - matches ES95486-02 Table 10-11's worked example (31 01 FF 01 / 71
+      01 FF 01) exactly. Both routines require SecurityAccess to be
+      unlocked first (UDS_Service_31.cin). -->
+ <!-- 2026-08-19: routineIdentifier FF00 (eraseMemory) now includes the
+      real SWUnitMemoryArea request parameter and SWUnitMemoryArea/
+      ErasedPartitionArea response parameters, from this project's real-
+      world reference spec (NE1aW_SBCM_Diagnostic_Data_251104.xlsx, "RID
+      FF00" sheet) - request is now 6 bytes, response 7 bytes (was 4/4).
+      SWUnitMemoryArea value 0x001B is illustrative - this simulator
+      accepts any value (see UDS_Service_31.cin); ErasedPartitionArea 0x01
+      = success (this simulator always returns success/simulated erase). -->
  <INSTANCE id="RoutineControlEraseMemory">
   <REQUEST>
    <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="31" semantics="SID CONST MOTOROLA" convId=""/>
    <PARAMETER id="routineControlType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
    <PARAMETER id="routineIdentifier" bitPos="23" bitLen="16" type="none" unit="" value="FF 00" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="SWUnitMemoryArea" bitPos="39" bitLen="16" type="none" unit="" value="00 1B" semantics="MOTOROLA" convId=""/>
   </REQUEST>
   <RESPONSE>
    <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="71" semantics="SID CONST MOTOROLA" convId=""/>
    <PARAMETER id="routineControlType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
    <PARAMETER id="routineIdentifier" bitPos="23" bitLen="16" type="none" unit="" value="FF 00" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="SWUnitMemoryArea" bitPos="39" bitLen="16" type="none" unit="" value="00 1B" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="ErasedPartitionArea" bitPos="55" bitLen="8" type="none" unit="" value="01" semantics="MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
  <INSTANCE id="RoutineControlCheckProgrammingDependencies">
@@ -457,7 +544,14 @@
  </INSTANCE>
  <!-- dataFormatIdentifier/addressAndLengthFormatIdentifier/memoryAddress/
       memorySize match ES95486-02 Table 10-12's worked example exactly
-      (34 00 33 00 1B 67 00 01 FF -> 74 20 00 FF). -->
+      (34 00 33 00 1B 67 00 01 FF -> 74 20 00 FF). 2026-08-19: memoryAddress
+      0x001B67 is now the ONLY value this simulator accepts for both
+      RequestDownload and RequestUpload - any other memoryAddress returns
+      NRC 0x70 (uploadDownloadNotAccepted), per this project's real-world
+      reference spec's implied single flash-region model (NE1aW_SBCM_
+      Diagnostic_Data_251104.xlsx) - see UDS_Service_34_35_36_37.cin's
+      SUPPORTED_MEMORY_ADDRESS. The example value below already matches
+      (00 1B 67), so no value change was needed here, only this note. -->
  <INSTANCE id="RequestDownloadApplicationSoftware">
   <REQUEST>
    <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="34" semantics="SID CONST MOTOROLA" convId=""/>

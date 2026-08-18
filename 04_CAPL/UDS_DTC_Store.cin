@@ -8,18 +8,32 @@
       - ControlDTCSetting          (0x85, UDS_Service_85.cin)
   Not a UDS service itself - a data module, same role as VehicleCondition.cin.
 
-  Sample DTC: this project has exactly ONE simulated DTC, invented for study
-  purposes (NOT a real Hyundai/Kia-assigned DTC - ES95486-02's Annex D
-  defines DTC status-bit semantics but leaves the actual DTC number/content
-  to each ECU's own diagnostic specification, which SBCM does not have in
-  this project):
+  Sample DTC: this project has exactly ONE simulated DTC. As of 2026-08-19
+  this is a REAL DTC taken from this project's real-world reference spec
+  (NE1aW_SBCM_Diagnostic_Data_251104.xlsx, "$19 ReadDTCInformation" sheet,
+  row 4) rather than an invented placeholder:
 
-      DTC_SAMPLE_NUMBER = 0x00B10100 ("B10100")
+      DTC_SAMPLE_NUMBER = 0x00960300 ("B160300")
+      Name: Vehicle Communication Bus E Bus OFF (B-CAN Bus OFF)
+      DEM Event ID: 0x43 (not modeled in this simulator - see below)
+      반영 유무 (adopted in this vehicle model): Y
 
   3-byte DTC number per SAE J2012-DA_DTCFormat_00 (DTCFormatIdentifier =
-  0x00, the format this project reports - ES95486-02 Table 6-15). The
-  top 2 bits of the high byte (10b) mark it as a "B" (Body) code, since
-  SBCM is a body-domain ECU - the remaining digits are arbitrary.
+  0x00, the format this project reports - ES95486-02 Table 6-15), taken
+  directly from the reference spec's "DTC (HEX)" column (High=0x96,
+  Middle=0x03, Low=0x00) rather than derived/guessed - the human-readable
+  name "B160300" and the raw bytes "96 03 00" differ because of how SAE
+  J2012 packs the DTC-type bits (Body/Chassis/Powertrain/Network) into the
+  top bits of the first byte; this project reproduces the spec's own byte
+  values as-is rather than re-deriving that encoding rule.
+
+  This project only models the DTC's status byte (statusOfDTC) via the
+  DTC_Debug_Set/ClearSampleFailed() hooks below - it does NOT model the
+  reference spec's DEM Event ID, aging-cycle counters, snapshot data, or
+  the specific Set/Release Condition logic described there (those require
+  a real B-CAN transceiver error-counter model this simulator does not
+  have); this remains a deliberate simplification, only the DTC's
+  identity (number + name) was upgraded to match the real spec.
 
   statusOfDTC bit layout (ES95486-02 Annex D.2.2, Table D-2) - this project
   only ever sets/clears the 6 bits below; TestNotCompletedSinceLastClear
@@ -56,13 +70,23 @@
                                             UDS_Service_85.cin (0x85),
                                             per ES95486-02 6.1/6.2/4.7 and
                                             Annex D.2.
+  2026-08-19    lee.sungwon@slworld.com    Replaced the invented sample DTC
+                                            (0x00B10100, "B10100") with a
+                                            real DTC (0x00960300, "B160300"
+                                            - Vehicle Communication Bus E
+                                            Bus OFF) taken from this
+                                            project's real-world reference
+                                            spec (NE1aW_SBCM_Diagnostic_
+                                            Data_251104.xlsx). Identity
+                                            only - status-bit simulation
+                                            behaviour unchanged.
 -----------------------------------------------------------------------------*/
 
 variables
 {
     const byte DTC_MAX_COUNT = 1; // single sample DTC for this study project
 
-    const dword DTC_SAMPLE_NUMBER = 0x00B10100; // see file header - invented, not a real DTC
+    const dword DTC_SAMPLE_NUMBER = 0x00960300; // see file header - real DTC "B160300"
 
     // statusOfDTC bit masks (ES95486-02 Annex D.2.2, Table D-2)
     const byte DTC_STATUS_TEST_FAILED                     = 0x01;
@@ -148,7 +172,7 @@ void DTC_Debug_SetSampleFailed()
                  | DTC_STATUS_CONFIRMED
                  | DTC_STATUS_TEST_FAILED_SINCE_CLEAR
                  | DTC_STATUS_WARNING_INDICATOR_REQUESTED;
-    write("UDS_DTC_Store: sample DTC B10100 set to testFailed/confirmed (status=0x%02X)", dtcStatus[0]);
+    write("UDS_DTC_Store: sample DTC B160300 set to testFailed/confirmed (status=0x%02X)", dtcStatus[0]);
 }
 
 // Study/demo hook - clears just testFailed/testFailedThisOperationCycle/
@@ -166,5 +190,5 @@ void DTC_Debug_ClearSampleFailed()
         return;
     }
     dtcStatus[0] = dtcStatus[0] & 0xF8; // clear bits 0x01,0x02,0x04 -> keep 0x08,0x10,0x20,0x40,0x80 (0x10/0x40 are always 0 anyway)
-    write("UDS_DTC_Store: sample DTC B10100 testFailed cleared (status=0x%02X)", dtcStatus[0]);
+    write("UDS_DTC_Store: sample DTC B160300 testFailed cleared (status=0x%02X)", dtcStatus[0]);
 }

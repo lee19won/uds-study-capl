@@ -9,8 +9,25 @@
 
       DID    Name                                  Len     Type    Example
       0xF100 DDS DataBase Version Number            #4~#11  ASCII   "26.06.18"
-      0xF1B1 ECUSoftwareUNIT1VersionDataIdentifier   #4~#8   ASCII   "26610"
+      0xF1B1 ECUSoftwareUNIT1VersionDataIdentifier   #4~#9   ASCII   "26.610"
       0xF197 System Name Data                       #4~#11  ASCII   "SBCM"
+      0xC0DE EOL Variant Coding                      #4~#11  HEX     8 bytes
+
+  F1B1's length was corrected from 5 to 6 bytes (2026-08-19) to match the
+  real-world NE1aW_SBCM_Diagnostic_Data_251104.xlsx reference spec's "DID
+  F100_F1EF" sheet, which documents F1B1 as byte range #4~#9 (6 bytes),
+  not the originally-guessed 5 bytes.
+
+  0xC0DE (EOL Variant Coding) is READ-ONLY from this module's perspective -
+  it is a real DID from the same reference spec's "$22 $2E DID" sheet,
+  where it is documented as Read in Default/Extended sessions (NOT
+  Programming - "-" in that column) and Read/Write in Extended session
+  with Security Level 9 required for the write. The actual stored value and
+  the write path (0x2E) live in UDS_Service_2E.cin, which this file calls
+  into via EOLVariantCoding_CopyTo() to read the current value back -
+  replacing this project's previous invented write-only DID (0xF198,
+  RepairShopCode), which does not appear anywhere in the real reference
+  spec's DID range.
 
   The Application Layer must:
       - #include "UDS_Service_22.cin"
@@ -41,6 +58,15 @@
                                             (service-supported-in-session
                                             check -> length check ->
                                             DID-supported check)
+  2026-08-19    lee.sungwon@slworld.com    Aligned to the real-world
+                                            NE1aW_SBCM_Diagnostic_Data
+                                            reference spec: corrected F1B1's
+                                            length from 5 to 6 bytes, and
+                                            added read support for 0xC0DE
+                                            (EOL Variant Coding, Default/
+                                            Extended sessions only, backed
+                                            by UDS_Service_2E.cin's write
+                                            path).
 -----------------------------------------------------------------------------*/
 
 variables
@@ -51,6 +77,10 @@ variables
     const word DID_F100 = 0xF100; // DDS DataBase Version Number
     const word DID_F1B1 = 0xF1B1; // ECUSoftwareUNIT1VersionDataIdentifier
     const word DID_F197 = 0xF197; // System Name Data
+    // DID_C0DE (EOL Variant Coding) and its EOL_VARIANT_LEN are defined in
+    // UDS_Service_2E.cin (the module that owns the writable storage) and
+    // reused here by name - same cross-file constant-sharing pattern this
+    // project already uses for SUBFUNC_* (UDS_Service_10.cin).
 
     // ---- Fixed sample data returned for each supported DID ----
     // NOTE: CAPL does not allow brace-initializer lists ( = {...} ) for
@@ -59,8 +89,8 @@ variables
     const byte F100_LEN = 8;
     byte F100_DATA[F100_LEN];   // "26.06.18"
 
-    const byte F1B1_LEN = 5;
-    byte F1B1_DATA[F1B1_LEN];   // "26610"
+    const byte F1B1_LEN = 6;
+    byte F1B1_DATA[F1B1_LEN];   // "26.610"
 
     const byte F197_LEN = 4;
     byte F197_DATA[F197_LEN];   // "SBCM"
@@ -82,12 +112,14 @@ void UDS_Service_22_Init()
     F100_DATA[6] = '1';
     F100_DATA[7] = '8';
 
-    // 0xF1B1 : "26610"
+    // 0xF1B1 : "26.610" (6 bytes - corrected from the original 5-byte guess,
+    // see file header)
     F1B1_DATA[0] = '2';
     F1B1_DATA[1] = '6';
-    F1B1_DATA[2] = '6';
-    F1B1_DATA[3] = '1';
-    F1B1_DATA[4] = '0';
+    F1B1_DATA[2] = '.';
+    F1B1_DATA[3] = '6';
+    F1B1_DATA[4] = '1';
+    F1B1_DATA[5] = '0';
 
     // 0xF197 : "SBCM"
     F197_DATA[0] = 'S';
@@ -109,6 +141,7 @@ void Handle_ReadDataByIdentifier(byte data[], word len)
     byte resp[32];
     byte i;
     byte respLen;
+    byte eolBuf[8]; // scratch buffer for the DID_C0DE case (EOL_VARIANT_LEN)
 
     // Figure 5 step 2: SID supported in the active session?
     if (!UDS_IsServiceSupportedInSession())
@@ -163,6 +196,28 @@ void Handle_ReadDataByIdentifier(byte data[], word len)
                 resp[respLen + i] = F197_DATA[i];
             }
             respLen = (byte)(respLen + F197_LEN);
+            break;
+
+        case DID_C0DE:
+            // Real reference spec ("$22 $2E DID" sheet): C0DE is Read in
+            // Default/Extended sessions only - the Programming-session
+            // column is "-" (not supported there), unlike F100/F1B1/F197
+            // which are unrestricted. This is a DID-level restriction, not
+            // the whole-SID session gate, so it is checked here rather than
+            // via UDS_IsServiceSupportedInSession().
+            if (UDS_GetCurrentSession() == SUBFUNC_PROGRAMMING_SESSION)
+            {
+                write("UDS_Service_22: DID 0xC0DE is not readable in the Programming session");
+                AppLayer_SendNegativeResponse(SID_READ_DATA_BY_IDENTIFIER,
+                                              NRC_REQUEST_OUT_OF_RANGE);
+                return;
+            }
+            EOLVariantCoding_CopyTo(eolBuf);
+            for (i = 0; i < EOL_VARIANT_LEN; i++)
+            {
+                resp[respLen + i] = eolBuf[i];
+            }
+            respLen = (byte)(respLen + EOL_VARIANT_LEN);
             break;
 
         default:

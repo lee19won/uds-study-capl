@@ -33,6 +33,15 @@
                                          lengthFormatIdentifier=0x20 (2-byte
                                          field) - exactly Table 10-12's
                                          "74 20 00 FF".
+      memoryAddress                   : only 0x001B67 (SUPPORTED_MEMORY_
+                                         ADDRESS, Table 10-12's own value) is
+                                         accepted - any other address gets
+                                         NRC 0x70 (uploadDownloadNotAccepted),
+                                         added 2026-08-19 per this project's
+                                         real-world reference spec's NRC list
+                                         for this service. Previously any
+                                         address was accepted as long as
+                                         memorySize != 0.
   transferRequestParameterRecord (RequestTransferExit) and
   routineControlOptionRecord-equivalent extra parameters are not
   supported by this simulator - Table 10-16's worked example uses a bare
@@ -95,6 +104,18 @@
                                             reprogramming sequence
                                             implementation (see also
                                             UDS_Service_31.cin).
+  2026-08-19    lee.sungwon@slworld.com    Added a memoryAddress range
+                                            check to RequestDownload/
+                                            RequestUpload: only
+                                            SUPPORTED_MEMORY_ADDRESS
+                                            (0x001B67, the Table 10-12
+                                            worked-example address) is
+                                            accepted, any other address now
+                                            gets NRC 0x70
+                                            (uploadDownloadNotAccepted) -
+                                            per this project's real-world
+                                            reference spec's NRC list for
+                                            this service.
 -----------------------------------------------------------------------------*/
 
 variables
@@ -106,6 +127,16 @@ variables
 
     const byte DFI_NO_COMPRESSION_NO_ENCRYPTION = 0x00;
     const byte ALFID_ADDR3_SIZE3                = 0x33;
+
+    // The only memory region this simulator actually models - matches
+    // ES95486-02 Table 10-12's own worked example address. A memoryAddress
+    // outside this single region is rejected with NRC 0x70
+    // (uploadDownloadNotAccepted), added 2026-08-19 per this project's
+    // real-world reference spec's NRC list for RequestDownload/
+    // RequestUpload (NE1aW_SBCM_Diagnostic_Data_251104.xlsx, "UDS Service
+    // List" sheet) - previously any non-zero memorySize with any
+    // memoryAddress was accepted.
+    const dword SUPPORTED_MEMORY_ADDRESS = 0x001B67;
 
     // Minimum length to read dataFormatIdentifier + addressAndLengthFormatIdentifier.
     const byte REQDL_MIN_REQ_LEN   = 3;
@@ -242,6 +273,19 @@ void HandleRequestDownloadOrUpload(byte data[], word len, byte sid, byte isDownl
 
     memAddr = ((dword)data[3] << 16) | ((dword)data[4] << 8) | data[5];
     memSize = ((dword)data[6] << 16) | ((dword)data[7] << 8) | data[8];
+
+    // Table 9-3/9-8, NRC 0x70 cause: the requested memory region is not
+    // supported by this server. This simulator only models the single
+    // ES95486-02 Table 10-12 worked-example region (SUPPORTED_MEMORY_ADDRESS)
+    // - distinct from the format-level NRC 0x31 checks above/below, which
+    // reject malformed requests rather than valid-but-unsupported ones.
+    if (memAddr != SUPPORTED_MEMORY_ADDRESS)
+    {
+        write("UDS_Service_34_35_36_37: unsupported memoryAddress (0x%06X) - only 0x%06X is supported",
+              memAddr, SUPPORTED_MEMORY_ADDRESS);
+        AppLayer_SendNegativeResponse(sid, NRC_UPLOAD_DOWNLOAD_NOT_ACCEPTED);
+        return;
+    }
 
     // Table 9-3/9-8, NRC 0x31 cause #3: memoryAddress/memorySize not valid.
     if (memSize == 0)
