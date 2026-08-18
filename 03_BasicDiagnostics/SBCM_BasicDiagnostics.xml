@@ -27,9 +27,87 @@
                                             ReadDataByIdentifier (F100/F1B1/F197,
                                             matching UDS_Service_22.cin's fixed
                                             sample data exactly)
+  2026-08-18    lee.sungwon@slworld.com    Populated NEGATIVE_RESPONSE_CODES with the
+                                            full standard ISO 14229-1 NRC table (59
+                                            entries, 0x10-0x94) so the Diagnostics
+                                            Console can show human-readable Error Text
+                                            for any negative response, not just the
+                                            NRCs this project currently sends (0x12,
+                                            0x13, 0x22 today). Uses <MAP nrc="decimal"
+                                            text="..."/> elements (nrc = decimal, NOT
+                                            hex) - this syntax was confirmed by the user
+                                            against a real, working CANoe-generated file
+                                            (user tested via the Basic Diagnostics
+                                            Editor UI). The 40 base entries' text wording
+                                            is copied verbatim from that confirmed file,
+                                            including its quirks (e.g. "Vehicle speed to
+                                            low", "Shifter level not in park"); 19 newer
+                                            ISO 14229-1:2020 codes (auth/certificate/
+                                            secure-data-transmission NRCs, 0x94) were
+                                            added in the same MAP style to complete the
+                                            standard table.
 -->
 <ECU protocol="UDS">
  <NEGATIVE_RESPONSE_CODES>
+  <MAP nrc="16" text="General reject"/>
+  <MAP nrc="17" text="Service not supported"/>
+  <MAP nrc="18" text="Sub-function not supported"/>
+  <MAP nrc="19" text="Incorrect Message Length or Invalid Format"/>
+  <MAP nrc="20" text="Response too long"/>
+  <MAP nrc="33" text="Busy - repeat request"/>
+  <MAP nrc="34" text="Conditions not correct"/>
+  <MAP nrc="36" text="Request Sequence Error"/>
+  <MAP nrc="37" text="No response from subnet component"/>
+  <MAP nrc="38" text="Failure prevents execution of requested action"/>
+  <MAP nrc="49" text="Request out of range"/>
+  <MAP nrc="51" text="Security access denied"/>
+  <MAP nrc="52" text="Authentication required"/>
+  <MAP nrc="53" text="Invalid key"/>
+  <MAP nrc="54" text="Exceed number of attempts"/>
+  <MAP nrc="55" text="Required time delay not expired"/>
+  <MAP nrc="56" text="Secure Data Transmission Required"/>
+  <MAP nrc="57" text="Secure Data Transmission Not Allowed"/>
+  <MAP nrc="58" text="Secure Data Verification Failed"/>
+  <MAP nrc="80" text="Certificate Verification Failed - Invalid Time Period"/>
+  <MAP nrc="81" text="Certificate Verification Failed - Invalid Signature"/>
+  <MAP nrc="82" text="Certificate Verification Failed - Invalid Chain of Trust"/>
+  <MAP nrc="83" text="Certificate Verification Failed - Invalid Type"/>
+  <MAP nrc="84" text="Certificate Verification Failed - Invalid Format"/>
+  <MAP nrc="85" text="Certificate Verification Failed - Invalid Content"/>
+  <MAP nrc="86" text="Certificate Verification Failed - Invalid Scope"/>
+  <MAP nrc="87" text="Certificate Verification Failed - Invalid Certificate (Revoked)"/>
+  <MAP nrc="88" text="Ownership Verification Failed"/>
+  <MAP nrc="89" text="Challenge Calculation Failed"/>
+  <MAP nrc="90" text="Setting Access Rights Failed"/>
+  <MAP nrc="91" text="Session Key Creation/Derivation Failed"/>
+  <MAP nrc="92" text="Configuration Data Usage Failed"/>
+  <MAP nrc="93" text="De-Authentication Failed"/>
+  <MAP nrc="112" text="Upload Download not accepted"/>
+  <MAP nrc="113" text="Transfer suspended"/>
+  <MAP nrc="114" text="General Programming Failure"/>
+  <MAP nrc="115" text="Wrong Block Sequence Counter"/>
+  <MAP nrc="120" text="Request correctly received - response pending"/>
+  <MAP nrc="126" text="Sub-function not supported in active session"/>
+  <MAP nrc="127" text="Service not supported in active session"/>
+  <MAP nrc="129" text="RPM too high"/>
+  <MAP nrc="130" text="RPM too low"/>
+  <MAP nrc="131" text="Engine is running"/>
+  <MAP nrc="132" text="Engine is not running"/>
+  <MAP nrc="133" text="Engine Run time too low"/>
+  <MAP nrc="134" text="Temperature too high"/>
+  <MAP nrc="135" text="Temperature too low"/>
+  <MAP nrc="136" text="Vehicle speed too high"/>
+  <MAP nrc="137" text="Vehicle speed to low"/>
+  <MAP nrc="138" text="Throttle/Pedal too high"/>
+  <MAP nrc="139" text="Throttle/Pedal too low"/>
+  <MAP nrc="140" text="Transmission range not in neutral"/>
+  <MAP nrc="141" text="Transmission range not in gear"/>
+  <MAP nrc="143" text="Brake Switch(es) not closed"/>
+  <MAP nrc="144" text="Shifter level not in park"/>
+  <MAP nrc="145" text="Torque converter clutch locked"/>
+  <MAP nrc="146" text="Voltage too high"/>
+  <MAP nrc="147" text="Voltage too low"/>
+  <MAP nrc="148" text="Resource Temporarily Not Available"/>
  </NEGATIVE_RESPONSE_CODES>
  <INSTANCE id="DefaultSession">
   <REQUEST>
