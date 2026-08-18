@@ -21,7 +21,7 @@ UDS(ISO 14229) 학습용 CAPL 기반 ECU 시뮬레이터입니다.
 > `04_CAPL` 에 진단 서비스가 추가/변경될 때마다 **같은 커밋에서 이 XML 도 함께 갱신**해야 합니다. (파일 상단 주석에 동기화 규칙 명시)
 
 CANoe 설정 파일은 버전 종속·절대 경로·병합 불가 문제가 있어 각자 생성합니다.
-설정 방법은 **[Doc/SETUP.md](Doc/SETUP.md)** 를 참고하세요. (약 5분 소요)
+설정 방법은 **[00_Documents/SETUP.md](00_Documents/SETUP.md)** 를 참고하세요. (약 5분 소요)
 
 ---
 
@@ -40,7 +40,7 @@ git clone https://github.com/lee19won/uds-study-capl.git
 > OneDrive / Google Drive 동기화 폴더는 피하세요. Git 저장소가 손상될 수 있습니다.
 
 ### 3. CANoe 설정 만들기
-**[Doc/SETUP.md](Doc/SETUP.md)** 를 따라 진행하세요.
+**[00_Documents/SETUP.md](00_Documents/SETUP.md)** 를 따라 진행하세요.
 
 ### 4. 코드 업데이트
 ```
@@ -54,11 +54,12 @@ CANoe 에서 **Ctrl+F7** 로 재컴파일하면 반영됩니다.
 
 ```
 uds-study-capl/
-├─ CAPL/      CAPL 소스
-├─ DBC/       네트워크 데이터베이스
-├─ Panel/     CANoe 패널
-├─ Doc/       설정 가이드 및 스터디 자료
-└─ .vscode/   VS Code 공통 설정 (인코딩 등)
+├─ 00_Documents/          설정 가이드 및 리포트
+├─ 01_Spec/                진단 요구사항명세서 (.docx)
+├─ 02_DBC/                 네트워크 데이터베이스 (.dbc)
+├─ 03_BasicDiagnostics/    CANoe Basic Diagnostics 서술 파일 (.xml), SecurityAccessDLL
+├─ 04_CAPL/                CAPL 소스 (.can, .cin)
+└─ .vscode/                VS Code 공통 설정 (인코딩 등)
 ```
 
 ---
@@ -76,14 +77,16 @@ uds-study-capl/
 ### 구현 구조
 
 ```
-[ Network Layer ]  CAPL/NetworkLayer_API.cin
+[ Network Layer ]  04_CAPL/NetworkLayer_API.cin
       ISO-TP 분할/조립 (SF / FF / CF / FC)
       N_Bs, N_Cr 타임아웃 처리
               |
               | AppLayer_OnDiagRequestReceived()
               v
-[ Application Layer ]  CAPL/SBCM_ECU_Simulator.can
-      UDS 서비스 처리 (0x10, 0x22, 0x19 ...)
+[ Application Layer ]  04_CAPL/SBCM_ECU_Simulator.can
+      UDS 서비스 처리 (0x10, 0x11, 0x14, 0x19, 0x22, 0x27, 0x28,
+                       0x2E, 0x2F, 0x31, 0x34, 0x35, 0x36, 0x37,
+                       0x3E, 0x85 ...)
               |
               | NetworkLayer_SendResponse()
               v
@@ -136,6 +139,19 @@ chore: 설정 / 잡무
 - [x] 0x10 DiagnosticSessionControl
 - [x] 0x3E TesterPresent (S3 타이머)
 - [x] 0x22 ReadDataByIdentifier
-- [ ] 0x27 SecurityAccess
-- [ ] 0x19 ReadDTCInformation
-- [ ] 0x2E WriteDataByIdentifier
+- [x] 0x27 SecurityAccess (ASK, Seed&Key DLL)
+- [x] 0x11 ECUReset (hardReset)
+- [x] 0x14 ClearDiagnosticInformation
+- [x] 0x19 ReadDTCInformation
+- [x] 0x28 CommunicationControl
+- [x] 0x85 ControlDTCSetting
+- [x] 0x2E WriteDataByIdentifier
+- [x] 0x2F InputOutputControlByIdentifier
+- [x] 0x31 RoutineControl (eraseMemory / checkProgrammingDependencies)
+- [x] 0x34 RequestDownload / 0x35 RequestUpload
+- [x] 0x36 TransferData / 0x37 RequestTransferExit
+
+> ES95486-02 §10.2 (Non-volatile server memory programming sequence) 전체를
+> 재현하는 수준까지 구현 완료 (2026-08-18/19). 자세한 서비스별 동작은 각
+> `04_CAPL/UDS_Service_*.cin` 파일 상단의 헤더 주석과 리비전 히스토리를
+> 참고하세요.

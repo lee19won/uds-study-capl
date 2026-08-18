@@ -5,10 +5,13 @@
 
   CANoe "Basic Diagnostics" ECU description for the SBCM simulator.
   This file must be kept in sync with the actually implemented CAPL
-  services (04_CAPL/UDS_Service_10.cin, UDS_Service_3E.cin,
-  UDS_Service_22.cin): whenever a service is added or its request/response
-  format changes, this file must be updated to match, in the same commit
-  as the CAPL change.
+  services (04_CAPL/UDS_Service_10.cin, UDS_Service_11.cin,
+  UDS_Service_14.cin, UDS_Service_19.cin, UDS_Service_22.cin,
+  UDS_Service_27.cin, UDS_Service_28.cin, UDS_Service_2E.cin,
+  UDS_Service_2F.cin, UDS_Service_31.cin, UDS_Service_34_35_36_37.cin,
+  UDS_Service_3E.cin, UDS_Service_85.cin): whenever a service is added or
+  its request/response format changes, this file must be updated to
+  match, in the same commit as the CAPL change.
 
   Schema note: this file's structure (ECU/NEGATIVE_RESPONSE_CODES/INSTANCE/
   REQUEST/RESPONSE/PARAMETER elements and attributes, and the "bitPos =
@@ -72,6 +75,75 @@
                                             SecurityAccessDLL/
                                             GenerateKeyExOpt.cpp), not typed
                                             in manually.
+  2026-08-19    lee.sungwon@slworld.com    Added 20 new INSTANCEs covering
+                                            all 11 services implemented as
+                                            part of the ES95486-02 10.2
+                                            reprogramming-sequence work
+                                            (Stages 1-3): ECUResetHardReset
+                                            (0x11), ClearDiagnosticInformationAll
+                                            (0x14), ReadDTCInfoReportNumberByStatusMask/
+                                            ReadDTCInfoReportDTCByStatusMask/
+                                            ReadDTCInfoReportSupportedDTC (0x19,
+                                            3 sub-functions),
+                                            CommunicationControlDisableRxAndTx/
+                                            CommunicationControlEnableRxAndTx (0x28),
+                                            WriteDataByIdentifierRepairShopCode (0x2E,
+                                            new writable DID F198),
+                                            IOControlSampleOutputReturnControlToECU/
+                                            IOControlSampleOutputResetToDefault/
+                                            IOControlSampleOutputShortTermAdjustment
+                                            (0x2F, invented sample DID F010),
+                                            RoutineControlEraseMemory/
+                                            RoutineControlCheckProgrammingDependencies
+                                            (0x31), RequestDownloadApplicationSoftware
+                                            (0x34), RequestUploadApplicationSoftware
+                                            (0x35), TransferDataDownloadBlock/
+                                            TransferDataUploadBlock (0x36),
+                                            RequestTransferExit (0x37),
+                                            ControlDTCSettingOn/
+                                            ControlDTCSettingOff (0x85). All
+                                            byte layouts were re-derived
+                                            directly from the actual CAPL
+                                            source in 04_CAPL (not from
+                                            memory/notes) immediately before
+                                            writing this XML, and cross-
+                                            checked against ES95486-02's own
+                                            worked examples where one exists
+                                            (Table 10-11 for RoutineControl,
+                                            Table 10-12 for RequestDownload/
+                                            RequestUpload). No NEGATIVE_RESPONSE_CODES
+                                            changes were needed - every NRC
+                                            used by the new services (0x10/
+                                            0x12/0x13/0x22/0x24/0x31/0x33/
+                                            0x70/0x71/0x72/0x73/0x7F) was
+                                            already present in the existing
+                                            40-entry table. IMPORTANT caveats
+                                            documented per-INSTANCE below:
+                                            (1) ReadDTCInfo's DTCCount/
+                                            DTCNumber/statusOfDTC example
+                                            values are illustrative only -
+                                            actual values depend on the
+                                            sample DTC's live status (see
+                                            UDS_DTC_Store.cin); (2)
+                                            TransferDataDownloadBlock/
+                                            TransferDataUploadBlock cannot
+                                            be sent standalone - they require
+                                            a prior successful RequestDownload/
+                                            RequestUpload in the same
+                                            measurement (same caveat already
+                                            applied to SecurityAccessSendKey);
+                                            (3) CommunicationControl's two
+                                            INSTANCEs use controlType WITHOUT
+                                            the suppressPositiveResponse bit
+                                            (0x03/0x00, not ES95486-02 Table
+                                            10-7's wire values 0x83/0x80) so
+                                            the Diagnostics Console actually
+                                            receives a response to inspect -
+                                            the suppressed-response wire
+                                            values are the ones a real
+                                            reprogramming sequence uses, but
+                                            they are not useful as a Console
+                                            example.
 -->
 <ECU protocol="UDS">
  <NEGATIVE_RESPONSE_CODES>
@@ -209,6 +281,264 @@
    <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="62" semantics="SID CONST MOTOROLA" convId=""/>
    <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 97" semantics="XID CONST MOTOROLA" convId=""/>
    <PARAMETER id="Data" bitPos="31" bitLen="32" type="asc" unit="" value="53 42 43 4D" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ECUResetHardReset">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="11" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="resetType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="51" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="resetType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ClearDiagnosticInformationAll">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="14" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="groupOfDTC" bitPos="15" bitLen="24" type="none" unit="" value="FF FF FF" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="54" semantics="SID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <!-- DTCCount/DTCNumber/statusOfDTC example values below are illustrative
+      only - actual values depend on the sample DTC's live status (see
+      UDS_DTC_Store.cin's DTC_Debug_SetSampleFailed()/_ClearSampleFailed(),
+      called via the CAPL Browser during a measurement). -->
+ <INSTANCE id="ReadDTCInfoReportNumberByStatusMask">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="19" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="reportType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCStatusMask" bitPos="23" bitLen="8" type="none" unit="" value="FF" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="59" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="reportType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCStatusAvailabilityMask" bitPos="23" bitLen="8" type="none" unit="" value="AF" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="DTCFormatIdentifier" bitPos="31" bitLen="8" type="none" unit="" value="00" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="DTCCount" bitPos="39" bitLen="16" type="none" unit="" value="00 00" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ReadDTCInfoReportDTCByStatusMask">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="19" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="reportType" bitPos="15" bitLen="8" type="none" unit="" value="02" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCStatusMask" bitPos="23" bitLen="8" type="none" unit="" value="FF" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="59" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="reportType" bitPos="15" bitLen="8" type="none" unit="" value="02" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCStatusAvailabilityMask" bitPos="23" bitLen="8" type="none" unit="" value="AF" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="DTCNumber" bitPos="31" bitLen="24" type="none" unit="" value="B1 01 00" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="statusOfDTC" bitPos="55" bitLen="8" type="none" unit="" value="AF" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ReadDTCInfoReportSupportedDTC">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="19" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="reportType" bitPos="15" bitLen="8" type="none" unit="" value="0A" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="59" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="reportType" bitPos="15" bitLen="8" type="none" unit="" value="0A" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCStatusAvailabilityMask" bitPos="23" bitLen="8" type="none" unit="" value="AF" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="DTCNumber" bitPos="31" bitLen="24" type="none" unit="" value="B1 01 00" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="statusOfDTC" bitPos="55" bitLen="8" type="none" unit="" value="00" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <!-- controlType uses the plain value (no suppressPositiveResponse bit) so
+      a response is actually returned for the Console to show - see the
+      file header's caveat (3). -->
+ <INSTANCE id="CommunicationControlDisableRxAndTx">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="28" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="controlType" bitPos="15" bitLen="8" type="none" unit="" value="03" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="communicationType" bitPos="23" bitLen="8" type="none" unit="" value="03" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="68" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="controlType" bitPos="15" bitLen="8" type="none" unit="" value="03" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="CommunicationControlEnableRxAndTx">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="28" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="controlType" bitPos="15" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="communicationType" bitPos="23" bitLen="8" type="none" unit="" value="03" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="68" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="controlType" bitPos="15" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <!-- dataRecord example value is the ASCII string "TESTER0001" (10 bytes,
+      matching UDS_Service_2E.cin's fixed F198_LEN) - a placeholder repair-
+      shop code, not a real value. -->
+ <INSTANCE id="WriteDataByIdentifierRepairShopCode">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="2E" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 98" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataRecord" bitPos="31" bitLen="80" type="asc" unit="" value="54 45 53 54 45 52 30 30 30 31" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="6E" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 98" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <!-- dataIdentifier F010 is a project-invented sample DID, NOT a real
+      ES95486-02 identifier - see UDS_Service_2F.cin's file header. -->
+ <INSTANCE id="IOControlSampleOutputReturnControlToECU">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="2F" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F0 10" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="inputOutputControlParameter" bitPos="31" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="6F" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F0 10" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="inputOutputControlParameter" bitPos="31" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="IOControlSampleOutputResetToDefault">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="2F" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F0 10" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="inputOutputControlParameter" bitPos="31" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="6F" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F0 10" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="inputOutputControlParameter" bitPos="31" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="controlState" bitPos="39" bitLen="8" type="none" unit="" value="00" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="IOControlSampleOutputShortTermAdjustment">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="2F" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F0 10" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="inputOutputControlParameter" bitPos="31" bitLen="8" type="none" unit="" value="03" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="controlState" bitPos="39" bitLen="8" type="none" unit="" value="01" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="6F" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F0 10" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="inputOutputControlParameter" bitPos="31" bitLen="8" type="none" unit="" value="03" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="controlState" bitPos="39" bitLen="8" type="none" unit="" value="01" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <!-- routineIdentifier FF00/FF01, plain 4-byte request/response with no
+      routineControlOptionRecord - matches ES95486-02 Table 10-11's worked
+      example (31 01 FF 00 / 71 01 FF 00) exactly. Both routines require
+      SecurityAccess to be unlocked first (UDS_Service_31.cin). -->
+ <INSTANCE id="RoutineControlEraseMemory">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="31" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="routineControlType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="routineIdentifier" bitPos="23" bitLen="16" type="none" unit="" value="FF 00" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="71" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="routineControlType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="routineIdentifier" bitPos="23" bitLen="16" type="none" unit="" value="FF 00" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="RoutineControlCheckProgrammingDependencies">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="31" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="routineControlType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="routineIdentifier" bitPos="23" bitLen="16" type="none" unit="" value="FF 01" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="71" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="routineControlType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="routineIdentifier" bitPos="23" bitLen="16" type="none" unit="" value="FF 01" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <!-- dataFormatIdentifier/addressAndLengthFormatIdentifier/memoryAddress/
+      memorySize match ES95486-02 Table 10-12's worked example exactly
+      (34 00 33 00 1B 67 00 01 FF -> 74 20 00 FF). -->
+ <INSTANCE id="RequestDownloadApplicationSoftware">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="34" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataFormatIdentifier" bitPos="15" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="addressAndLengthFormatIdentifier" bitPos="23" bitLen="8" type="none" unit="" value="33" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="memoryAddress" bitPos="31" bitLen="24" type="none" unit="" value="00 1B 67" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="memorySize" bitPos="55" bitLen="24" type="none" unit="" value="00 01 FF" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="74" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="lengthFormatIdentifier" bitPos="15" bitLen="8" type="none" unit="" value="20" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="maxNumberOfBlockLength" bitPos="23" bitLen="16" type="none" unit="" value="00 FF" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="RequestUploadApplicationSoftware">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="35" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataFormatIdentifier" bitPos="15" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="addressAndLengthFormatIdentifier" bitPos="23" bitLen="8" type="none" unit="" value="33" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="memoryAddress" bitPos="31" bitLen="24" type="none" unit="" value="00 1B 67" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="memorySize" bitPos="55" bitLen="24" type="none" unit="" value="00 01 FF" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="75" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="lengthFormatIdentifier" bitPos="15" bitLen="8" type="none" unit="" value="20" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="maxNumberOfBlockLength" bitPos="23" bitLen="16" type="none" unit="" value="00 FF" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <!-- Requires a prior successful RequestDownload/RequestUpload in the same
+      measurement (blockSequenceCounter starts at 01 - UDS_Service_34_35_36_37.cin)
+      - see the file header's caveat (2). transferRequestParameter/
+      transferResponseParameter example bytes are illustrative only (no
+      real memory content exists in this simulator). -->
+ <INSTANCE id="TransferDataDownloadBlock">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="36" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="blockSequenceCounter" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="transferRequestParameter" bitPos="23" bitLen="32" type="none" unit="" value="01 02 03 04" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="76" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="blockSequenceCounter" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="TransferDataUploadBlock">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="36" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="blockSequenceCounter" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="76" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="blockSequenceCounter" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="MOTOROLA" convId=""/>
+   <PARAMETER id="transferResponseParameter" bitPos="23" bitLen="32" type="none" unit="" value="00 01 02 03" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="RequestTransferExit">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="37" semantics="SID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="77" semantics="SID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ControlDTCSettingOn">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="85" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCSettingType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="C5" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCSettingType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ControlDTCSettingOff">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="85" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCSettingType" bitPos="15" bitLen="8" type="none" unit="" value="02" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="C5" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="DTCSettingType" bitPos="15" bitLen="8" type="none" unit="" value="02" semantics="XID CONST MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
 </ECU>

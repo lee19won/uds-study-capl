@@ -77,19 +77,20 @@ delivered source.
 
 ## Wiring it into CANoe
 
-This part has **not been confirmed live** (no CANoe available in this
-project's cloud sandbox) - please try it and report back what you see, the
-same way the NRC table and ISO-TP frame-type issue were debugged earlier
-in this project.
+This has been **confirmed live** in CANoe - the DLL was built locally,
+wired in, and the request-seed / send-key exchange against
+`UDS_Service_27.cin`'s SecurityAccess (0x27) implementation was verified
+working end-to-end.
 
-Likely location (based on the "Diagnostics/ISO TP Configuration" dialog
-already used for this project's addressing/frame-type settings): the
-per-ECU "Diagnostic Layer" node in that same dialog tree probably has a
-Security Access tab where you can point to a DLL path and select
-`GenerateKeyExOpt` as the function. Configure:
+Location (in the "Diagnostics/ISO TP Configuration" dialog already used
+for this project's addressing/frame-type settings): the per-ECU
+"Diagnostic Layer" node in that same dialog tree has a Security Access tab
+where you point to a DLL path and select `GenerateKeyExOpt` as the
+function. Configure:
 
 - DLL path: the `SecurityAccessDLL.dll` built above
 - Security level / variant: `0x11` (only level this project implements)
 
-If a request-seed / send-key exchange in the Diagnostics Console still
-requires manually pasting the Key, that's the setting to look for.
+With this wired up, a request-seed / send-key exchange in the Diagnostics
+Console computes the Key automatically instead of requiring it to be
+pasted in by hand.

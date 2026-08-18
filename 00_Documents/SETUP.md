@@ -51,9 +51,9 @@ C:\study\uds\MyConfig\UDS_Study.cfg
 
 1. **Simulation Setup** 창 열기
 2. 좌측 네트워크(CAN1) 의 **Databases** 우클릭 → **Add**
-3. 파일 선택:
+3. 파일 선택 (최신 버전 사용, 2026-08-19 기준 `v0.3`):
    ```
-   ..\DBC\SBCM_XX_CANFD_DataBase_v0_1.dbc
+   ..\02_DBC\SBCM_XX_CANFD_DataBase_v0.3.dbc
    ```
 4. 추가 후 노드 목록에 **SBCM**, **OBD** 가 보이면 성공
 
@@ -66,7 +66,7 @@ C:\study\uds\MyConfig\UDS_Study.cfg
 2. 노드 이름: `SBCM_Simulator`
 3. 노드 우클릭 → **Configuration** → CAPL 파일 지정:
    ```
-   ..\CAPL\SBCM_ECU_Simulator.can
+   ..\04_CAPL\SBCM_ECU_Simulator.can
    ```
 
 > `NetworkLayer_API.cin` 은 `.can` 파일 안에서 `#include` 로 자동 참조되므로
@@ -109,15 +109,21 @@ C:\study\uds\MyConfig\UDS_Study.cfg
 4. 측정 시작 후 전송
 
 **기대 결과** — Trace 창에 `0x7B8` 응답이 나타납니다.
-현재는 Application Layer 가 미구현 상태라 부정 응답이 옵니다:
+Application Layer 의 0x10 DiagnosticSessionControl 이 구현되어 있으므로
+정상적인 긍정 응답이 옵니다:
 ```
-03 7F 10 11 55 55 55 55
+02 50 01 55 55 55 55 55
 ```
-- `7F` : Negative Response
-- `10` : 요청한 서비스
-- `11` : serviceNotSupported
+- `50` : Positive Response (0x10 + 0x40)
+- `01` : 진입한 세션 (defaultSession)
 
-여기까지 확인되면 **Network Layer 가 정상 동작**하는 것입니다.
+여기까지 확인되면 **Network Layer 와 Application Layer 가 정상 동작**하는 것입니다.
+
+> 참고: 이 저장소는 이제 ES95486-02 §10.2 재현 수준까지 여러 서비스
+> (0x11/0x14/0x19/0x22/0x27/0x28/0x2E/0x2F/0x31/0x34~0x37/0x3E/0x85) 가
+> 구현되어 있습니다. 각 서비스의 정확한 요청/응답 바이트 구성은
+> `03_BasicDiagnostics/SBCM_BasicDiagnostics.xml` 의 `<INSTANCE>` 예제나
+> 각 `04_CAPL/UDS_Service_*.cin` 파일 상단의 헤더 주석을 참고하세요.
 
 ---
 
