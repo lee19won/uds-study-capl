@@ -126,6 +126,18 @@
                                             client bypass the brute-force
                                             lockout just by switching
                                             sessions).
+  2026-08-18    lee.sungwon@slworld.com    Added SecurityAccess_IsUnlocked(),
+                                            a public getter for the private
+                                            securityUnlocked state. Needed by
+                                            the new UDS_Service_2E.cin
+                                            (WriteDataByIdentifier), which per
+                                            ES95486-02 Table 3-1 requires
+                                            SecurityAccess to be unlocked in
+                                            the Programming/Extended/Safety
+                                            System sessions. Part of Stage 2
+                                            of the ES95486-02 10.2
+                                            reprogramming sequence
+                                            implementation.
 -----------------------------------------------------------------------------*/
 
 variables
@@ -199,6 +211,18 @@ void SecurityAccess_ResetOnSessionChange()
     securityUnlocked   = 0;
     securitySeedIssued = 0;
     write("UDS_Service_27: SecurityAccess re-locked (diagnostic session changed)");
+}
+
+// ===========================================================================
+// Public getter so other service modules (e.g. UDS_Service_2E.cin's
+// WriteDataByIdentifier, ES95486-02 Table 3-1: WDBI is Diamond/"security
+// required" in Programming/Extended/SafetySystem sessions) can check the
+// current SecurityAccess unlock state without reaching into this module's
+// private securityUnlocked variable directly.
+// ===========================================================================
+byte SecurityAccess_IsUnlocked()
+{
+    return securityUnlocked;
 }
 
 // ===========================================================================

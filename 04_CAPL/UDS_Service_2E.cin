@@ -1,0 +1,184 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_2E.cin
+
+  WriteDataByIdentifier (0x2E) UDS service implementation, per ES95486-02
+  5.6 (Table 5-22 ~ 5-24) and Annex C.1.
+
+  Supported DID: 0xF198 RepairShopCodeOrTesterSerialNumberDataIdentifier
+  (Annex C.1: "This value shall be used to reference the repair shop code
+  or tester (client) serial number... Record data content and format
+  shall be server specific and defined by the vehicle manufacturer") - a
+  genuine ES95486-02 standard DID, chosen per project decision to add a
+  NEW writable sample DID distinct from the 3 existing read-only DIDs in
+  UDS_Service_22.cin (F100/F1B1/F197). This project fixes its length at
+  10 bytes ASCII (server-specific choice, since the spec leaves the
+  format open) and does NOT expose it via ReadDataByIdentifier (0x22) -
+  it is write-only in this simulator, matching how a repair-shop code is
+  typically set once during service and not read back diagnostically.
+
+  ES95486-02 Table 3-1: WriteDataByIdentifier (2E hex) is X (not
+  supported) in the Default Session, Diamond (possible, SecurityAccess
+  required) in Programming/Extended/SafetySystem sessions, with Engine
+  Condition "Engine stop, IGN on" (same condition as ECUReset and
+  Programming Session entry - see VehicleCondition.cin /
+  UDS_IsEngineConditionOk(), reused here).
+
+  The Application Layer must:
+      - #include "UDS_Service_2E.cin"
+      - call UDS_Service_2E_Init() from on preStart (e.g. via UDS_SessionInit())
+      - call Handle_WriteDataByIdentifier(data, len) from the UDS request
+        dispatcher
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x2E
+                                            WriteDataByIdentifier, single
+                                            writable sample DID (0xF198,
+                                            RepairShopCodeOrTesterSerial
+                                            NumberDataIdentifier), per
+                                            ES95486-02 5.6. Stage 2 of the
+                                            ES95486-02 10.2 reprogramming
+                                            sequence implementation (see
+                                            also UDS_Service_2F.cin).
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_WRITE_DATA_BY_IDENTIFIER = 0x2E;
+
+    // ---- Supported (writable) Data Identifier ----
+    const word DID_F198 = 0xF198; // RepairShopCodeOrTesterSerialNumberDataIdentifier
+
+    // Project-defined fixed length for F198 in this simulator (the spec
+    // leaves format/length "server specific"). NOTE: CAPL does not allow
+    // brace-initializer lists for arrays in the "variables" block (see
+    // UDS_Service_22.cin's header comment for the same restriction), so
+    // the array is filled element-by-element in UDS_Service_2E_Init().
+    const byte F198_LEN = 10;
+    byte F198_DATA[F198_LEN];
+
+    // Minimum request length: SID + DID(2) + at least 1 dataRecord byte.
+    const byte WDBI_MIN_REQ_LEN = 4;
+    // Exact request length this simulator accepts for F198 (SID + DID(2) +
+    // fixed 10-byte dataRecord).
+    const byte WDBI_F198_REQ_LEN = 3 + F198_LEN;
+}
+
+// ===========================================================================
+// Must be called once from the Application Layer "on preStart"
+// (e.g. from UDS_SessionInit()) before any 0x2E request is handled.
+// Default value is 10 spaces (0x20) - "not yet programmed".
+// ===========================================================================
+void UDS_Service_2E_Init()
+{
+    byte i;
+
+    for (i = 0; i < F198_LEN; i++)
+    {
+        F198_DATA[i] = ' ';
+    }
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 (see UDS_Common.cin for the
+// full chain); WriteDataByIdentifier has no sub-function, so Figure 6 does
+// not apply - "specific SID checks" follow directly after the session
+// check, per ES95486-02 Table 5-24's own NRC ordering (0x13 -> 0x22 ->
+// 0x31 -> 0x33). "SID supported?" (NRC 0x11) is already handled by the
+// caller's dispatch switch before this function is reached.
+//
+// One deviation from the literal Table 5-24 order is required here: the
+// exact expected request length depends on which DID was requested (this
+// simulator only defines one, but the check is written generically), so
+// the DID-supported check (NRC 0x31) necessarily comes before the exact
+// -length check, even though Table 5-24 lists 0x13 first. A minimum
+// -length check (just enough to read the DID) is still done first, exactly
+// as UDS_Service_22.cin's ReadDataByIdentifier handles the same structural
+// issue.
+void Handle_WriteDataByIdentifier(byte data[], word len)
+{
+    word did;
+    byte responseSid;
+    byte resp[3];
+    byte i;
+
+    // Figure 5 step 2: SID supported in the active session? ES95486-02
+    // Table 3-1: X in Default Session.
+    if (UDS_GetCurrentSession() == SUBFUNC_DEFAULT_SESSION)
+    {
+        AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Minimum length check: enough to read the DID (SID + DID = 3, plus at
+    // least 1 dataRecord byte per Table 5-22's Cvt=M on data#1).
+    if (len < WDBI_MIN_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    did = ((word)data[1] << 8) | data[2];
+
+    // Table 5-24, NRC 0x31 cause #1: "The dataIdentifier in the request
+    // message is not supported in the server or the dataIdentifier is
+    // supported for read only purpose (via ReadDataByIdentifier service)."
+    // This simulator's only writable DID is F198; F100/F1B1/F197 (read-only,
+    // see UDS_Service_22.cin) and any other DID fall into this same cause.
+    if (did != DID_F198)
+    {
+        write("UDS_Service_2E: Unsupported or read-only DID (0x%04X)", did);
+        AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
+                                      NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
+    // Exact length check, now that the DID (and therefore its expected
+    // dataRecord length) is known.
+    if (len != WDBI_F198_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    // ES95486-02 Table 3-1 Engine Condition column: "Engine stop, IGN on"
+    // (same condition reused from UDS_Service_10.cin's Programming Session
+    // gate / UDS_Service_11.cin's ECUReset gate).
+    if (!UDS_IsEngineConditionOk())
+    {
+        AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
+                                      NRC_CONDITIONS_NOT_CORRECT);
+        return;
+    }
+
+    // ES95486-02 Table 3-1: F198 is only writable in a session where
+    // SecurityAccess has been unlocked (Diamond symbol, "security
+    // required").
+    if (!SecurityAccess_IsUnlocked())
+    {
+        AppLayer_SendNegativeResponse(SID_WRITE_DATA_BY_IDENTIFIER,
+                                      NRC_SECURITY_ACCESS_DENIED);
+        return;
+    }
+
+    // Execute: write dataRecord into F198_DATA.
+    for (i = 0; i < F198_LEN; i++)
+    {
+        F198_DATA[i] = data[3 + i];
+    }
+
+    responseSid = (byte)(SID_WRITE_DATA_BY_IDENTIFIER + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+    resp[1] = data[1];
+    resp[2] = data[2];
+
+    write("UDS_Service_2E: WriteDataByIdentifier positive response sent (DID=0x%04X)", did);
+    NetworkLayer_SendResponse(resp, 3);
+}

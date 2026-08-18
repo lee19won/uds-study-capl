@@ -64,6 +64,19 @@
                                             0x2F) and Stage 3 (0x31/0x34/0x35/
                                             0x36/0x37) follow in later
                                             changes.
+  2026-08-18    lee.sungwon@slworld.com    Stage 2 of the ES95486-02 10.2
+                                            reprogramming-sequence services:
+                                            added UDS_Service_2E.cin
+                                            (WriteDataByIdentifier, new
+                                            writable sample DID 0xF198) and
+                                            UDS_Service_2F.cin
+                                            (InputOutputControlByIdentifier,
+                                            invented sample DID 0xF010) -
+                                            includes, Init() calls, and
+                                            dispatcher cases for SID
+                                            0x2E/0x2F. Stage 3 (0x31/0x34/
+                                            0x35/0x36/0x37) follows in a
+                                            later change.
 -----------------------------------------------------------------------------*/
 
 includes
@@ -80,6 +93,8 @@ includes
     #include "UDS_Service_22.cin"
     #include "UDS_Service_27.cin"
     #include "UDS_Service_28.cin"
+    #include "UDS_Service_2E.cin"
+    #include "UDS_Service_2F.cin"
     #include "UDS_Service_85.cin"
 }
 
@@ -166,6 +181,14 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
             UDS_Handle_CommunicationControl(data, len);
             break;
 
+        case 0x2E:
+            UDS_Handle_WriteDataByIdentifier(data, len);
+            break;
+
+        case 0x2F:
+            UDS_Handle_InputOutputControlByIdentifier(data, len);
+            break;
+
         case 0x3E:
             UDS_Handle_TesterPresent(data, len);
             break;
@@ -188,6 +211,8 @@ void UDS_SessionInit()
     UDS_Service_22_Init();
     UDS_Service_27_Init();
     CommunicationControl_Init();
+    UDS_Service_2E_Init();
+    UDS_Service_2F_Init();
 }
 
 void UDS_Handle_DiagnosticSessionControl(byte data[], word len)
@@ -233,6 +258,16 @@ void UDS_Handle_CommunicationControl(byte data[], word len)
 void UDS_Handle_ControlDTCSetting(byte data[], word len)
 {
     Handle_ControlDTCSetting(data, len);
+}
+
+void UDS_Handle_WriteDataByIdentifier(byte data[], word len)
+{
+    Handle_WriteDataByIdentifier(data, len);
+}
+
+void UDS_Handle_InputOutputControlByIdentifier(byte data[], word len)
+{
+    Handle_InputOutputControlByIdentifier(data, len);
 }
 
 // ===========================================================================

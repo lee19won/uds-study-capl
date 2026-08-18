@@ -1,0 +1,234 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_2F.cin
+
+  InputOutputControlByIdentifier (0x2F) UDS service implementation, per
+  ES95486-02 7.1 (Table 7-1 ~ 7-4).
+
+  Supported DID: 0xF010 SampleOutputActuatorControlDataIdentifier.
+  IMPORTANT: this DID is a PROJECT INVENTION, not a real Hyundai/Kia DID -
+  ES95486-02's Annex C.1 does not define any concrete IO-control DID
+  example (7.1's own request/response tables use a generic placeholder
+  "dataIdentifier #1"), and this simulator has no real actuator/sensor
+  model to control. F010 was picked simply because it falls outside the
+  standardized F1xx name block (F100-F1FF, see UDS_Service_22.cin /
+  UDS_Service_2E.cin) used by this project's other sample DIDs, to avoid
+  any appearance of being a real spec-assigned identifier. This mirrors
+  how UDS_DTC_Store.cin's sample DTC (B10100) is documented as invented.
+
+  The sample DID models a single 1-byte ON/OFF output (e.g. a generic
+  actuator or indicator) and implements 3 of the 4
+  inputOutputControlParameter values from Table 7-2:
+      0x00 returnControlToECU   (RCTECU) - supported
+      0x01 resetToDefault       (RTD)    - supported (resets to OFF)
+      0x02 freezeCurrentState   (FCS)    - NOT supported by this sample DID
+                                           (NRC 0x31, requestOutOfRange)
+      0x03 shortTermAdjustment  (STA)    - supported, 1 controlState byte
+                                           (0x00=OFF, 0x01=ON)
+  This DID has a single, non-bitmapped parameter, so no
+  controlEnableMaskRecord is required (Table 7-1, C2 "depends on
+  dataIdentifier" - not applicable here).
+
+  ES95486-02 Table 3-1: InputOutputControlByIdentifier (2F hex) is X in
+  the Default Session, X in the Programming Session, and possible
+  (Diamond-solid / no security required) ONLY in the Extended Diagnostic
+  Session - the strictest session gate of any service in this project
+  (every other gated service allows at least one more session). Engine
+  Condition is "System specific" (3.1.1); since this simulator has no
+  physical actuator to protect, no additional engine-condition gate is
+  applied here (same reasoning as ReadDataByIdentifier's "no
+  restriction").
+
+  The Application Layer must:
+      - #include "UDS_Service_2F.cin"
+      - call UDS_Service_2F_Init() from on preStart (e.g. via UDS_SessionInit())
+      - call Handle_InputOutputControlByIdentifier(data, len) from the UDS
+        request dispatcher
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x2F
+                                            InputOutputControlByIdentifier,
+                                            one invented sample DID
+                                            (0xF010, clearly documented as
+                                            non-spec), 3 of 4
+                                            inputOutputControlParameter
+                                            values (RCTECU/RTD/STA; FCS
+                                            not supported), per ES95486-02
+                                            7.1. Stage 2 of the ES95486-02
+                                            10.2 reprogramming sequence
+                                            implementation (see also
+                                            UDS_Service_2E.cin).
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER = 0x2F;
+
+    // ---- Supported (invented, non-spec) sample IO Data Identifier ----
+    const word DID_SAMPLE_IO = 0xF010; // SampleOutputActuatorControlDataIdentifier (project-invented)
+
+    // ---- inputOutputControlParameter values (Table 7-2) ----
+    const byte IOCP_RETURN_CONTROL_TO_ECU  = 0x00; // RCTECU
+    const byte IOCP_RESET_TO_DEFAULT       = 0x01; // RTD
+    const byte IOCP_FREEZE_CURRENT_STATE   = 0x02; // FCS (not supported here)
+    const byte IOCP_SHORT_TERM_ADJUSTMENT  = 0x03; // STA
+
+    const byte IO_SAMPLE_DEFAULT_STATE = 0x00; // OFF
+
+    // Request lengths: SID + DID(2) + IOCP(1) = 4 for RCTECU/RTD;
+    // + controlState(1) = 5 for STA.
+    const byte IOCBI_REQ_LEN_NO_STATE = 4;
+    const byte IOCBI_REQ_LEN_WITH_STATE = 5;
+
+    byte ioSampleState;         // current controlled value (0x00/0x01)
+    byte ioUnderTesterControl;  // 1 while a tester-issued STA is in effect
+}
+
+// ===========================================================================
+// Must be called once from the Application Layer "on preStart"
+// (e.g. from UDS_SessionInit()) before any 0x2F request is handled.
+// ===========================================================================
+void UDS_Service_2F_Init()
+{
+    ioSampleState        = IO_SAMPLE_DEFAULT_STATE;
+    ioUnderTesterControl = 0;
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 (see UDS_Common.cin for the
+// full chain); InputOutputControlByIdentifier has no sub-function (the
+// suppressPositiveResponse bit does not apply to this service either), so
+// "specific SID checks" follow directly after the session check. Because
+// the exact expected request length depends on both the DID (which
+// parameter values it supports) and the inputOutputControlParameter value
+// itself, the checks are necessarily layered: minimum length -> DID
+// support -> IOCP value support -> exact length -> per-IOCP value
+// validation -> execute. This mirrors UDS_Service_2E.cin's equivalent
+// deviation from a single fixed-position length check.
+void Handle_InputOutputControlByIdentifier(byte data[], word len)
+{
+    word did;
+    byte iocp;
+    byte controlState;
+    byte responseSid;
+    byte resp[5];
+    byte respLen;
+
+    // Figure 5 step 2: SID supported in the active session? ES95486-02
+    // Table 3-1: X in Default Session, X in Programming Session - only the
+    // Extended Diagnostic Session is allowed (the strictest gate in this
+    // project).
+    if (UDS_GetCurrentSession() != SUBFUNC_EXTENDED_DIAGNOSTIC_SESSION)
+    {
+        AppLayer_SendNegativeResponse(SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Minimum length check: enough to read the DID and the IOCP byte.
+    if (len < IOCBI_REQ_LEN_NO_STATE)
+    {
+        AppLayer_SendNegativeResponse(SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    did = ((word)data[1] << 8) | data[2];
+
+    // Table 7-4, NRC 0x31 cause #1: "the requested dataIdentifier value is
+    // not supported by the device."
+    if (did != DID_SAMPLE_IO)
+    {
+        write("UDS_Service_2F: Unsupported DID (0x%04X)", did);
+        AppLayer_SendNegativeResponse(SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER,
+                                      NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
+    iocp = data[3];
+
+    // Table 7-4, NRC 0x31 cause #2: "the dataIdentifier uses the
+    // controlState#1 parameter as an inputOutputControlParameter and the
+    // value contained in this parameter is invalid" - this sample DID does
+    // not support freezeCurrentState (0x02) at all.
+    if (iocp != IOCP_RETURN_CONTROL_TO_ECU
+        && iocp != IOCP_RESET_TO_DEFAULT
+        && iocp != IOCP_SHORT_TERM_ADJUSTMENT)
+    {
+        write("UDS_Service_2F: Unsupported inputOutputControlParameter (0x%02X)", iocp);
+        AppLayer_SendNegativeResponse(SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER,
+                                      NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
+    // Exact length check, now that the IOCP value (and therefore whether a
+    // controlState byte follows) is known.
+    if (iocp == IOCP_SHORT_TERM_ADJUSTMENT)
+    {
+        if (len != IOCBI_REQ_LEN_WITH_STATE)
+        {
+            AppLayer_SendNegativeResponse(SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER,
+                                          NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+            return;
+        }
+
+        controlState = data[4];
+        if (controlState != 0x00 && controlState != 0x01)
+        {
+            write("UDS_Service_2F: Invalid controlState (0x%02X)", controlState);
+            AppLayer_SendNegativeResponse(SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER,
+                                          NRC_REQUEST_OUT_OF_RANGE);
+            return;
+        }
+    }
+    else
+    {
+        if (len != IOCBI_REQ_LEN_NO_STATE)
+        {
+            AppLayer_SendNegativeResponse(SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER,
+                                          NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+            return;
+        }
+    }
+
+    // ---- Execute ----
+    responseSid = (byte)(SID_INPUT_OUTPUT_CONTROL_BY_IDENTIFIER + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+    resp[1] = data[1];
+    resp[2] = data[2];
+    resp[3] = iocp;
+    respLen = 4;
+
+    if (iocp == IOCP_RETURN_CONTROL_TO_ECU)
+    {
+        // ES95486-02 7.1: "The server shall send a positive response
+        // message ... even if the dataIdentifier is currently not under
+        // tester control." No controlState bytes for RCTECU on this
+        // single-parameter DID (Table 7-2: "Number of controlState bytes
+        // in pos. response: if the dataIdentifier consists of more than
+        // one parameter" - it does not).
+        ioUnderTesterControl = 0;
+        write("UDS_Service_2F: returnControlToECU (DID=0x%04X, state=%d)", did, ioSampleState);
+    }
+    else if (iocp == IOCP_RESET_TO_DEFAULT)
+    {
+        ioSampleState = IO_SAMPLE_DEFAULT_STATE;
+        resp[4] = ioSampleState;
+        respLen = 5;
+        write("UDS_Service_2F: resetToDefault (DID=0x%04X, state=%d)", did, ioSampleState);
+    }
+    else // IOCP_SHORT_TERM_ADJUSTMENT
+    {
+        ioSampleState         = controlState;
+        ioUnderTesterControl  = 1;
+        resp[4] = ioSampleState;
+        respLen = 5;
+        write("UDS_Service_2F: shortTermAdjustment (DID=0x%04X, state=%d)", did, ioSampleState);
+    }
+
+    NetworkLayer_SendResponse(resp, respLen);
+}
