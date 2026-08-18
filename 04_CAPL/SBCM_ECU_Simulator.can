@@ -33,12 +33,18 @@
                                             call in on preStart (documented as
                                             mandatory but never actually
                                             invoked - fixed)
+  2026-08-18    lee.sungwon@slworld.com    Added VehicleCondition.cin
+                                            (VCU/IGN condition monitoring per
+                                            ES95486-02) and its Init() call,
+                                            needed by UDS_Service_10.cin's new
+                                            Programming Session condition gate
 -----------------------------------------------------------------------------*/
 
 includes
 {
     #include "UDS_Common.cin"
     #include "NetworkLayer_API.cin"
+    #include "VehicleCondition.cin"
     #include "UDS_Service_10.cin"
     #include "UDS_Service_3E.cin"
     #include "UDS_Service_22.cin"
@@ -51,6 +57,7 @@ variables
 on preStart
 {
     NetworkLayer_Init();
+    VehicleCondition_Init();
     UDS_SessionInit();
     write("SBCM ECU Simulator: UDS services initialized. Waiting for requests on 0x7B0 ...");
 }

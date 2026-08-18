@@ -33,6 +33,34 @@
                                             sub-function-supported check ->
                                             sub-function-supported-in-session
                                             check)
+  2026-08-18    lee.sungwon@slworld.com    Added Programming Session
+                                            (subFunction 0x02, ES95486-02
+                                            Table 4-2) support. Per
+                                            ES95486-02 Table 3-1 footnote C2
+                                            and Table 4-4 (NRC 0x22
+                                            conditionNotCorrect), transitioning
+                                            into the Programming Session
+                                            requires "Engine stop, IGN on";
+                                            this project is an EV, so the
+                                            condition is VCU stop (
+                                            VCU_EvDrvRdySta) AND IGN1 on (
+                                            BCM_Ign1InSta) - see
+                                            VehicleCondition.cin. This is the
+                                            only sub-function transition
+                                            among this simulator's services
+                                            that ES95486-02 actually
+                                            condition-gates (TesterPresent and
+                                            ReadDataByIdentifier are "no
+                                            restriction" per Table 3-1 / 4.5.3
+                                            / 5.1.3 and are intentionally left
+                                            unchanged). Only Programming
+                                            Session entry (positive response)
+                                            is added here; the actual
+                                            reprogramming services (e.g.
+                                            WriteDataByIdentifier,
+                                            RequestDownload/TransferData/
+                                            TransferExit) remain unimplemented
+                                            and out of scope.
 -----------------------------------------------------------------------------*/
 
 variables
@@ -40,6 +68,7 @@ variables
     const byte SID_DIAGNOSTIC_SESSION_CONTROL        = 0x10;
 
     const byte SUBFUNC_DEFAULT_SESSION               = 0x01;
+    const byte SUBFUNC_PROGRAMMING_SESSION           = 0x02;
     const byte SUBFUNC_EXTENDED_DIAGNOSTIC_SESSION   = 0x03;
 
     byte currentSession;
@@ -90,7 +119,9 @@ void Handle_DiagnosticSessionControl(byte data[], word len)
     subFunction = data[1];
 
     // Figure 6 step 5: sub-function supported at all?
-    if (subFunction != SUBFUNC_DEFAULT_SESSION && subFunction != SUBFUNC_EXTENDED_DIAGNOSTIC_SESSION)
+    if (subFunction != SUBFUNC_DEFAULT_SESSION
+        && subFunction != SUBFUNC_PROGRAMMING_SESSION
+        && subFunction != SUBFUNC_EXTENDED_DIAGNOSTIC_SESSION)
     {
         AppLayer_SendNegativeResponse(SID_DIAGNOSTIC_SESSION_CONTROL,
                                       NRC_SUBFUNCTION_NOT_SUPPORTED);
@@ -105,7 +136,20 @@ void Handle_DiagnosticSessionControl(byte data[], word len)
         return;
     }
 
-    // Figure 6 step 7: specific SID checks / execute service
+    // Figure 6 step 7 / ES95486-02 Table 3-1 footnote C2: entering the
+    // Programming Session requires "Engine stop, IGN on" (VCU stop AND
+    // IGN1 on for this EV project). This is checked here, as part of the
+    // "specific SID checks" step, and only for this one sub-function -
+    // Default/Extended session requests have "no restriction" per
+    // ES95486-02 Table 3-1.
+    if (subFunction == SUBFUNC_PROGRAMMING_SESSION && !UDS_IsEngineConditionOk())
+    {
+        AppLayer_SendNegativeResponse(SID_DIAGNOSTIC_SESSION_CONTROL,
+                                      NRC_CONDITIONS_NOT_CORRECT);
+        return;
+    }
+
+    // Figure 6 step 7: execute service
     currentSession = subFunction;
     responseSid = (byte)(SID_DIAGNOSTIC_SESSION_CONTROL + SID_POSITIVE_RESPONSE_OFFSET);
     resp[0] = responseSid;

@@ -1,0 +1,190 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  VehicleCondition.cin
+
+  VCU (Engine-equivalent, EV) and IGN condition monitoring, per ES95486-02
+  (Hyundai/Kia engineering standard, Rev 16) section 3.1 "Summary of Engine
+  conditions" (Table 3-1 / Table 3-1.1 "Diagnostic engine condition
+  overview" / 3.1.1.1 "Engine signal example" / 3.1.1.2 "Engine condition
+  by signal status").
+
+  This project is an EV, so per project decision the spec's generic
+  "Engine condition" is represented by the VCU_EvDrvRdySta signal
+  (ES95486-02 Table 3.1.1.1, EV row: VCU_01_10ms / VCU_EvDrvRdySta). The
+  "IGN condition" uses BCM_Ign1InSta only (project decision: IGN1 only -
+  BCM_Ign2InSta is intentionally not modeled. ES95486-02 itself does not
+  define IGN1/IGN2 semantics; it only ever refers to a single combined
+  "IGN on" condition).
+
+  Signal source: both VCU_01_10ms (CAN ID 53) and BDC_FD_02_200ms (CAN ID
+  977), including bit position, factor/offset and value table, are copied
+  as-is from the real vehicle network database
+  (20250519_STD_DB_CAR_R2.0_2024_Local_FD-SBCM_DRV_SBCM_DRV_FD_v25.05.01.dbc)
+  so this study project stays consistent with the real network definition.
+  NOTE: in that real database SBCM is NOT a receiver of either message,
+  because none of SBCM's currently specified diagnostic services require an
+  Engine/VCU or IGN condition per ES95486-02 Table 3-1 (see UDS_Service_10
+  .cin / UDS_Service_3E.cin / UDS_Service_22.cin for the per-service
+  analysis). Adding SBCM as a receiver in this project's DBC is therefore a
+  study-only extension, made so this project can demonstrate ES95486-02's
+  condition-gating mechanism on DiagnosticSessionControl's Programming
+  Session transition (the one case where SBCM's implemented services are
+  actually condition-gated by the spec).
+
+  Condition determination state machine (ES95486-02 3.1.1.2, "Engine
+  condition by signal status"):
+      Never received (after ECU startup) -> most conservative state
+                                              (VCU: Stop / IGN: Off)
+      Time out (cyclic signal timed out)  -> keep the last received value
+      Normal                              -> keep the last received value
+  ES95486-02 only defines this 3-state model for the Engine/VCU signal.
+  This project extends the same "assume Off/Stop until proven otherwise"
+  default to the IGN signal as well (IGN's own "never received" behaviour
+  is not specified by ES95486-02 - this is a project design decision, not
+  a spec requirement). Applying the same default state to both signals and
+  then evaluating each service's own required state against it keeps the
+  two conditions consistent: VCU's required state is "Stop" (the Off
+  default satisfies it), IGN's required state is "On" (the Off default
+  does NOT satisfy it) - so the two conditions differ in outcome, but not
+  in the underlying default-state rule.
+
+  Public API:
+      void VehicleCondition_Init()   - call once from "on preStart"
+      byte UDS_IsVcuConditionOk()    - 1 if VCU condition = Stop
+      byte UDS_IsIgnConditionOk()    - 1 if IGN1 condition = On
+      byte UDS_IsEngineConditionOk() - 1 if VCU Stop AND IGN1 On
+                                        (ES95486-02 footnote C2:
+                                        "Engine stop, IGN on")
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - VCU
+                                            (VCU_EvDrvRdySta) and IGN1
+                                            (BCM_Ign1InSta) condition
+                                            monitoring per ES95486-02
+                                            3.1.1/3.1.1.2, used by
+                                            DiagnosticSessionControl's
+                                            Programming Session condition
+                                            gate (see UDS_Service_10.cin)
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    // ---- ES95486-02 Table 3.1.1.1 (EV row): VCU_01_10ms / VCU_EvDrvRdySta
+    // Real-network GenSigTimeoutTime = 500 ms
+    const dword VCU_SIGNAL_TIMEOUT_MS   = 500;
+    const byte  VCU_EV_DRV_RDY_NONE     = 0; // "None"           -> Stop
+    const byte  VCU_EV_DRV_RDY_ON       = 1; // "EV Drivable"    -> Running
+    const byte  VCU_EV_DRV_RDY_NOTUSED  = 2; // "Not used"       -> Stop
+    const byte  VCU_EV_DRV_RDY_ERROR    = 3; // "Error Indicator"-> Stop
+
+    byte    vcuEverReceived;
+    byte    vcuLastValue;      // last received VCU_EvDrvRdySta value
+    msTimer vcuTimeoutTimer;
+
+    // ---- BDC_FD_02_200ms / BCM_Ign1InSta (IGN1 only, per project decision)
+    // Real-network GenSigTimeoutTime = 1500 ms
+    const dword IGN_SIGNAL_TIMEOUT_MS = 1500;
+    const byte  IGN1_OFF              = 0;
+    const byte  IGN1_ON               = 1;
+    const byte  IGN1_NOTUSED          = 2;
+    const byte  IGN1_ERROR            = 3;
+
+    byte    ignEverReceived;
+    byte    ignLastValue;      // last received BCM_Ign1InSta value
+    msTimer ignTimeoutTimer;
+}
+
+// ===========================================================================
+// Must be called once from the Application Layer "on preStart".
+// ===========================================================================
+void VehicleCondition_Init()
+{
+    vcuEverReceived = 0;
+    vcuLastValue    = VCU_EV_DRV_RDY_NONE;
+    cancelTimer(vcuTimeoutTimer);
+
+    ignEverReceived = 0;
+    ignLastValue    = IGN1_OFF;
+    cancelTimer(ignTimeoutTimer);
+}
+
+// ===========================================================================
+// RX: VCU_01_10ms (CAN ID 53) - only VCU_EvDrvRdySta is modeled
+// ===========================================================================
+on message VCU_01_10ms
+{
+    vcuEverReceived = 1;
+    vcuLastValue    = this.VCU_EvDrvRdySta;
+    setTimer(vcuTimeoutTimer, VCU_SIGNAL_TIMEOUT_MS);
+}
+
+on timer vcuTimeoutTimer
+{
+    // ES95486-02 3.1.1.2 "Time out": keep the last received condition, so
+    // vcuLastValue is intentionally left unchanged here. This handler only
+    // logs the transition for observability.
+    write("VehicleCondition: VCU_EvDrvRdySta timed out (>%d ms) - keeping last value (%d)",
+          VCU_SIGNAL_TIMEOUT_MS, vcuLastValue);
+}
+
+// ===========================================================================
+// RX: BDC_FD_02_200ms (CAN ID 977) - only BCM_Ign1InSta is modeled
+// ===========================================================================
+on message BDC_FD_02_200ms
+{
+    ignEverReceived = 1;
+    ignLastValue    = this.BCM_Ign1InSta;
+    setTimer(ignTimeoutTimer, IGN_SIGNAL_TIMEOUT_MS);
+}
+
+on timer ignTimeoutTimer
+{
+    // Same "Time out -> keep last value" rule, extended from ES95486-02
+    // 3.1.1.2 to the IGN signal (see file header note).
+    write("VehicleCondition: BCM_Ign1InSta timed out (>%d ms) - keeping last value (%d)",
+          IGN_SIGNAL_TIMEOUT_MS, ignLastValue);
+}
+
+// ===========================================================================
+// Public condition queries
+// ===========================================================================
+
+// ES95486-02 Table 3.1.1.1 (EV row): "Engine Running/Stop: Except EV
+// Drivable, the others are ENGINE STOP" -> the VCU condition ("Engine
+// stop") is satisfied whenever the current value is anything other than
+// VCU_EV_DRV_RDY_ON (EV Drivable/Running).
+byte UDS_IsVcuConditionOk()
+{
+    if (!vcuEverReceived)
+    {
+        // 3.1.1.2 "Never received (After start up ECU)" -> Engine/VCU Off,
+        // i.e. Stop -> the "Engine stop" condition is satisfied.
+        return 1;
+    }
+    return (vcuLastValue != VCU_EV_DRV_RDY_ON) ? 1 : 0;
+}
+
+byte UDS_IsIgnConditionOk()
+{
+    if (!ignEverReceived)
+    {
+        // No ES95486-02 rule for IGN's "never received" case. By extension
+        // of the Engine/VCU default-state rule (see file header), this
+        // project assumes the most conservative state (IGN Off) until a
+        // real message has been received, so the "IGN on" condition is NOT
+        // met yet.
+        return 0;
+    }
+    return (ignLastValue == IGN1_ON) ? 1 : 0;
+}
+
+// ES95486-02 footnote C2 (Table 3-1): "Engine stop, IGN on"
+byte UDS_IsEngineConditionOk()
+{
+    return (UDS_IsVcuConditionOk() && UDS_IsIgnConditionOk()) ? 1 : 0;
+}

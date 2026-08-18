@@ -1,0 +1,100 @@
+VERSION "0.3"
+
+
+NS_ :
+	NS_DESC_
+	CM_
+	BA_DEF_
+	BA_
+	VAL_
+	CAT_DEF_
+	CAT_
+	FILTER
+	BA_DEF_DEF_
+	EV_DATA_
+	ENVVAR_DATA_
+	SGTYPE_
+	SGTYPE_VAL_
+	BA_DEF_SGTYPE_
+	BA_SGTYPE_
+	SIG_TYPE_REF_
+	VAL_TABLE_
+	SIG_GROUP_
+	SIG_VALTYPE_
+	SIGTYPE_VALTYPE_
+	BO_TX_BU_
+	BA_DEF_REL_
+	BA_REL_
+	BA_DEF_DEF_REL_
+	BU_SG_REL_
+	BU_EV_REL_
+	BU_BO_REL_
+	SG_MUL_VAL_
+
+BS_:
+
+BU_: OBD SBCM VCU BCM
+
+
+BO_ 1968 SBCM_Diag_Req: 8 OBD
+ SG_ SBCM_Diag_Req_07 : 56|8@1+ (1,0) [0|255] ""  SBCM
+ SG_ SBCM_Diag_Req_06 : 48|8@1+ (1,0) [0|255] ""  SBCM
+ SG_ SBCM_Diag_Req_05 : 40|8@1+ (1,0) [0|255] ""  SBCM
+ SG_ SBCM_Diag_Req_04 : 32|8@1+ (1,0) [0|255] ""  SBCM
+ SG_ SBCM_Diag_Req_03 : 24|8@1+ (1,0) [0|255] ""  SBCM
+ SG_ SBCM_Diag_Req_02 : 16|8@1+ (1,0) [0|255] ""  SBCM
+ SG_ SBCM_Diag_Req_01 : 8|8@1+ (1,0) [0|255] ""  SBCM
+ SG_ SBCM_Diag_Req_00 : 0|8@1+ (1,0) [0|255] ""  SBCM
+
+BO_ 1976 SBCM_Diag_Resp: 8 SBCM
+ SG_ SBCM_Diag_Resp_07 : 56|8@1+ (1,0) [0|255] ""  OBD
+ SG_ SBCM_Diag_Resp_06 : 48|8@1+ (1,0) [0|255] ""  OBD
+ SG_ SBCM_Diag_Resp_05 : 40|8@1+ (1,0) [0|255] ""  OBD
+ SG_ SBCM_Diag_Resp_04 : 32|8@1+ (1,0) [0|255] ""  OBD
+ SG_ SBCM_Diag_Resp_03 : 24|8@1+ (1,0) [0|255] ""  OBD
+ SG_ SBCM_Diag_Resp_02 : 16|8@1+ (1,0) [0|255] ""  OBD
+ SG_ SBCM_Diag_Resp_01 : 8|8@1+ (1,0) [0|255] ""  OBD
+ SG_ SBCM_Diag_Resp_00 : 0|8@1+ (1,0) [0|255] ""  OBD
+
+BO_ 53 VCU_01_10ms: 32 VCU
+ SG_ VCU_EvDrvRdySta : 28|2@1+ (1,0) [0|3] ""  SBCM
+
+BO_ 977 BDC_FD_02_200ms: 32 BCM
+ SG_ BCM_Ign1InSta : 28|2@1+ (1,0) [0|3] ""  SBCM
+
+
+
+CM_ BO_ 53 "VCU status message (subset). Message ID / DLC / signal bit-layout copied as-is from the real vehicle network database (20250519_STD_DB_CAR_R2.0_2024_Local_FD-SBCM_DRV_SBCM_DRV_FD_v25.05.01.dbc) for ES95486-02 VCU-condition-gating study. Only VCU_EvDrvRdySta is modeled here; the other real signals carried by this message are intentionally omitted as out of scope for this project.";
+CM_ SG_ 53 VCU_EvDrvRdySta "VCU_EvDriveReadyStatus. ES95486-02 Table 3.1.1.1 (EV row) example signal; used as the project's 'VCU condition', which replaces the spec's generic 'Engine condition' for this EV project. Real-network GenMsgCycleTime=50ms, GenSigTimeoutTime=500ms (see VehicleCondition.cin).";
+CM_ BO_ 977 "BCM status message (subset). Message ID / DLC / signal bit-layout copied as-is from the real vehicle network database (20250519_STD_DB_CAR_R2.0_2024_Local_FD-SBCM_DRV_SBCM_DRV_FD_v25.05.01.dbc) for ES95486-02 IGN-condition-gating study. Only BCM_Ign1InSta is modeled here (project decision: IGN1 only, BCM_Ign2InSta intentionally not modeled); the other real signals carried by this message are intentionally omitted as out of scope for this project.";
+CM_ SG_ 977 BCM_Ign1InSta "BCM_Ignition1InputStatus. Used as the project's 'IGN condition'. ES95486-02 does not define IGN signal semantics itself (only the combined phrase 'Engine stop, IGN on'); this signal/value mapping is copied from the real network database. Real-network GenMsgCycleTime=200ms, GenSigTimeoutTime=1500ms (see VehicleCondition.cin).";
+
+BA_DEF_  "MultiplexExtEnabled" ENUM  "No","Yes";
+BA_DEF_ BO_  "CANFD_BRS" ENUM  "0","1";
+BA_DEF_  "DBName" STRING ;
+BA_DEF_  "BusType" STRING ;
+BA_DEF_ BU_  "NodeLayerModules" STRING ;
+BA_DEF_ BU_  "ECU" STRING ;
+BA_DEF_ BU_  "CANoeJitterMax" INT 0 0;
+BA_DEF_ BU_  "CANoeJitterMin" INT 0 0;
+BA_DEF_ BU_  "CANoeDrift" INT 0 0;
+BA_DEF_ BU_  "CANoeStartDelay" INT 0 0;
+BA_DEF_ BO_  "VFrameFormat" ENUM  "StandardCAN","ExtendedCAN","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","reserved","StandardCAN_FD","ExtendedCAN_FD";
+BA_DEF_DEF_  "MultiplexExtEnabled" "No";
+BA_DEF_DEF_  "CANFD_BRS" "1";
+BA_DEF_DEF_  "DBName" "";
+BA_DEF_DEF_  "BusType" "";
+BA_DEF_DEF_  "NodeLayerModules" "";
+BA_DEF_DEF_  "ECU" "";
+BA_DEF_DEF_  "CANoeJitterMax" 0;
+BA_DEF_DEF_  "CANoeJitterMin" 0;
+BA_DEF_DEF_  "CANoeDrift" 0;
+BA_DEF_DEF_  "CANoeStartDelay" 0;
+BA_DEF_DEF_  "VFrameFormat" "StandardCAN";
+BA_ "BusType" "CAN FD";
+BA_ "DBName" "CAN_FD";
+BA_ "VFrameFormat" BO_ 53 14;
+BA_ "VFrameFormat" BO_ 977 14;
+
+VAL_ 53 VCU_EvDrvRdySta 0 "None" 1 "EV Drivable" 2 "Not used" 3 "Error Indicator" ;
+VAL_ 977 BCM_Ign1InSta 0 "IGN1 Off" 1 "IGN1 On" 2 "Not Used" 3 "Error Indicator" ;
