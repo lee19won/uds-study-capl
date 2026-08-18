@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="Windows-1252"?>
+<!--
+  SBCM_BasicDiagnostics.xml
+  Project: UDS Study
+
+  CANoe "Basic Diagnostics" ECU description for the SBCM simulator.
+  This file must be kept in sync with the actually implemented CAPL
+  services (04_CAPL/UDS_Service_10.cin, UDS_Service_3E.cin,
+  UDS_Service_22.cin): whenever a service is added or its request/response
+  format changes, this file must be updated to match, in the same commit
+  as the CAPL change.
+
+  Schema note: this file's structure (ECU/NEGATIVE_RESPONSE_CODES/INSTANCE/
+  REQUEST/RESPONSE/PARAMETER elements and attributes, and the "bitPos =
+  startByte*8 + 7" convention used for every PARAMETER regardless of its
+  own bitLen) was reverse-engineered from a real, working CANoe Basic
+  Diagnostics export (PDIO_FL ECU) supplied by the user on 2026-08-18, to
+  avoid Commit/compile errors when this file is loaded.
+
+  Revision History
+  Date          Author                      Description
+  2026-08-18    lee.sungwon@slworld.com    Initial version - DiagnosticSessionControl
+                                            (Default/Programming/Extended session,
+                                            2-byte response - no sessionParameterRecord,
+                                            matching the actual CAPL response),
+                                            TesterPresent (zeroSubFunction only),
+                                            ReadDataByIdentifier (F100/F1B1/F197,
+                                            matching UDS_Service_22.cin's fixed
+                                            sample data exactly)
+-->
+<ECU protocol="UDS">
+ <NEGATIVE_RESPONSE_CODES>
+ </NEGATIVE_RESPONSE_CODES>
+ <INSTANCE id="DefaultSession">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="10" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="diagnosticSessionType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="50" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="diagnosticSessionType" bitPos="15" bitLen="8" type="none" unit="" value="01" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ProgrammingSession">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="10" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="diagnosticSessionType" bitPos="15" bitLen="8" type="none" unit="" value="02" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="50" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="diagnosticSessionType" bitPos="15" bitLen="8" type="none" unit="" value="02" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ExtendedSession">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="10" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="diagnosticSessionType" bitPos="15" bitLen="8" type="none" unit="" value="03" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="50" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="diagnosticSessionType" bitPos="15" bitLen="8" type="none" unit="" value="03" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="TesterPresent">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="3E" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="zeroSubFunction" bitPos="15" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="7E" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="zeroSubFunction" bitPos="15" bitLen="8" type="none" unit="" value="00" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="CanDataBaseVersionNumber">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="22" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 00" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="62" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 00" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="Data" bitPos="31" bitLen="64" type="asc" unit="" value="32 36 2E 30 36 2E 31 38" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="ECUSoftwareUNIT1Version">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="22" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 B1" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="62" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 B1" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="Data" bitPos="31" bitLen="40" type="asc" unit="" value="32 36 36 31 30" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="SystemNameData">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="22" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 97" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="62" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="dataIdentifier" bitPos="15" bitLen="16" type="none" unit="" value="F1 97" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="Data" bitPos="31" bitLen="32" type="asc" unit="" value="53 42 43 4D" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+</ECU>

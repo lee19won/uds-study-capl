@@ -13,8 +13,12 @@ UDS(ISO 14229) 학습용 CAPL 기반 ECU 시뮬레이터입니다.
 |---|---|
 | CAPL 소스 (`.can`, `.cin`) | CANoe 설정 (`.cfg`) |
 | 네트워크 DB (`.dbc`) | 컴파일 결과 (`.cbf`) |
-| 패널 (`.xvp`) | 측정 로그 (`.blf`, `.asc`, `.log`) |
-| 문서 (`.md`) | 리포트, 백업, 임시 파일 |
+| Basic Diagnostics 서술 파일 (`03_BasicDiagnostics/*.xml`) | 측정 로그 (`.blf`, `.asc`, `.log`) |
+| 패널 (`.xvp`) | 리포트, 백업, 임시 파일 |
+| 문서 (`.md`) | |
+
+> **`03_BasicDiagnostics/SBCM_BasicDiagnostics.xml`** 은 CANoe **Basic Diagnostics** 패널이 사용하는 서비스 정의 파일입니다.
+> `04_CAPL` 에 진단 서비스가 추가/변경될 때마다 **같은 커밋에서 이 XML 도 함께 갱신**해야 합니다. (파일 상단 주석에 동기화 규칙 명시)
 
 CANoe 설정 파일은 버전 종속·절대 경로·병합 불가 문제가 있어 각자 생성합니다.
 설정 방법은 **[Doc/SETUP.md](Doc/SETUP.md)** 를 참고하세요. (약 5분 소요)
