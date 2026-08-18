@@ -89,6 +89,43 @@
                                             independent Python cross-check
                                             (verify_algorithm.py) updated to
                                             match in the same change.
+  2026-08-18    lee.sungwon@slworld.com    Two spec-compliance fixes found on
+                                            a re-read of ES95486-02 4.1 (the
+                                            DiagnosticSessionControl section):
+                                            (1) SecurityAccess is marked "X"
+                                            (not supported) in the Default
+                                            Session in Table 3-1 - this was
+                                            not enforced before (the shared
+                                            UDS_IsServiceSupportedInSession()
+                                            hook always returned 1); now
+                                            checked directly against
+                                            UDS_GetCurrentSession() at the top
+                                            of Handle_SecurityAccess(), NRC
+                                            0x7F. (2) Per the note under Table
+                                            4-2, "Whenever DSC is called
+                                            successfully..., the
+                                            securityAccess rights... will be
+                                            initialized again", and 4.1's
+                                            transition rules 3/4: every
+                                            successful DiagnosticSessionControl
+                                            (0x10) response, and every S3-timer
+                                            revert to Default Session, must
+                                            re-lock SecurityAccess. Added
+                                            SecurityAccess_ResetOnSessionChange()
+                                            (called from UDS_Service_10.cin
+                                            and UDS_Service_3E.cin) which
+                                            clears securityUnlocked and any
+                                            pending securitySeedIssued. Per
+                                            explicit project decision, the
+                                            3-attempt counter and 180s lockout
+                                            timer are NOT reset by this - they
+                                            intentionally persist across
+                                            session changes (ES95486-02 does
+                                            not say either way; resetting them
+                                            on a session change would let a
+                                            client bypass the brute-force
+                                            lockout just by switching
+                                            sessions).
 -----------------------------------------------------------------------------*/
 
 variables
@@ -145,6 +182,23 @@ void UDS_Service_27_Init()
     securityLcgState = 0x2A7F3C11;
 
     cancelTimer(securityLockoutTimer);
+}
+
+// ===========================================================================
+// Called from UDS_Service_10.cin (every successful DiagnosticSessionControl
+// positive response - ES95486-02 4.1, note under Table 4-2: "Whenever the
+// service DSC is called successfully..., the securityAccess rights... will
+// be initialized again") and from UDS_Service_3E.cin (when the S3 timer
+// reverts the session to Default Session). Only the granted/unlock state
+// and any pending (unconsumed) seed are cleared here - the 3-attempt
+// counter and the 180s lockout timer intentionally keep running across
+// session changes (project decision; see this file's revision history).
+// ===========================================================================
+void SecurityAccess_ResetOnSessionChange()
+{
+    securityUnlocked   = 0;
+    securitySeedIssued = 0;
+    write("UDS_Service_27: SecurityAccess re-locked (diagnostic session changed)");
 }
 
 // ===========================================================================
@@ -216,7 +270,14 @@ void Handle_SecurityAccess(byte data[], word len)
     byte i;
 
     // Figure 5 step 2: SID supported in the active session?
-    if (!UDS_IsServiceSupportedInSession())
+    // ES95486-02 Table 3-1: SecurityAccess (27 hex) is marked "X" (not
+    // supported) in the Default Session - only Programming/Extended/Safety
+    // System sessions may use it. Checked directly against the session here
+    // (instead of through the shared UDS_IsServiceSupportedInSession() hook
+    // used by 0x10/0x22/0x3E, all of which are "no restriction" per Table
+    // 3-1) because 0x27 is the only service this simulator implements that
+    // is actually session-gated at this step.
+    if (UDS_GetCurrentSession() == SUBFUNC_DEFAULT_SESSION)
     {
         AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
                                       NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);

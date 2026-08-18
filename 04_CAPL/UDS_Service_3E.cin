@@ -28,6 +28,24 @@
                                             Session (previously only logged)
   2026-08-16    lee.sungwon@slworld.com    Applied the ISO 14229-1 Figure 5/6
                                             NRC priority order
+  2026-08-18    lee.sungwon@slworld.com    Two fixes found on a re-read of
+                                            ES95486-02: (1) TP_S3_TIMEOUT_MS
+                                            was 3000 (3s), but Table 2-13
+                                            defines S3Server as 5000ms
+                                            (tolerance -0/+200ms) - corrected
+                                            to 5000. (2) The S3 timer's
+                                            revert-to-Default-Session handler
+                                            now also calls
+                                            SecurityAccess_ResetOnSessionChange()
+                                            (UDS_Service_27.cin), since 4.1's
+                                            transition rule 4 (non-default ->
+                                            default) requires Security
+                                            settings to be reset the same way
+                                            an explicit DiagnosticSessionControl
+                                            to defaultSession does - this
+                                            applies whether the return to
+                                            Default happens via an explicit
+                                            0x10 request or via S3 timeout.
 -----------------------------------------------------------------------------*/
 
 variables
@@ -37,7 +55,7 @@ variables
     const byte SUBFUNC_KEEP_ALIVE                    = 0x00;
     const byte SUBFUNC_SUPPRESS_POSITIVE_RESPONSE    = 0x80;
 
-    const dword TP_S3_TIMEOUT_MS                     = 3000;
+    const dword TP_S3_TIMEOUT_MS                     = 5000; // ES95486-02 Table 2-13: S3Server, tolerance -0/+200ms
 
     msTimer tpS3Timer;
 }
@@ -113,4 +131,8 @@ on timer tpS3Timer
 {
     write("UDS_Service_3E: S3 timer expired - reverting to Default Session");
     UDS_SetCurrentSession(SUBFUNC_DEFAULT_SESSION);
+
+    // ES95486-02 4.1, transition rule 4 (non-default -> default): Security
+    // settings must be reset here too, not only on an explicit 0x10 request.
+    SecurityAccess_ResetOnSessionChange();
 }

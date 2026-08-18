@@ -61,6 +61,28 @@
                                             RequestDownload/TransferData/
                                             TransferExit) remain unimplemented
                                             and out of scope.
+  2026-08-18    lee.sungwon@slworld.com    Added a call to
+                                            SecurityAccess_ResetOnSessionChange()
+                                            (UDS_Service_27.cin) right after a
+                                            successful session switch. Per
+                                            ES95486-02 4.1, note under Table
+                                            4-2: "Whenever the service DSC is
+                                            called successfully (that includes
+                                            also calling DSC with the
+                                            currently active
+                                            DiagnosticSessionType), the
+                                            securityAccess rights... will be
+                                            initialized again" - so this now
+                                            runs unconditionally on every
+                                            positive response, even a no-op
+                                            re-request of the already-active
+                                            session. (This project's ECU is
+                                            not one of the CGW/ICU/ESU/CCU
+                                            controllers the spec carves out an
+                                            exception for when going
+                                            extendedDiagnosticSession ->
+                                            non-default, so the general rule
+                                            applies unconditionally here.)
 -----------------------------------------------------------------------------*/
 
 variables
@@ -151,6 +173,13 @@ void Handle_DiagnosticSessionControl(byte data[], word len)
 
     // Figure 6 step 7: execute service
     currentSession = subFunction;
+
+    // ES95486-02 4.1, note under Table 4-2: every successful
+    // DiagnosticSessionControl re-initializes (re-locks) the
+    // SecurityAccess rights - unconditionally, even when re-requesting the
+    // session that is already active.
+    SecurityAccess_ResetOnSessionChange();
+
     responseSid = (byte)(SID_DIAGNOSTIC_SESSION_CONTROL + SID_POSITIVE_RESPONSE_OFFSET);
     resp[0] = responseSid;
     resp[1] = subFunction;
