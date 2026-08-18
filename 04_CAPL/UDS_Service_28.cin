@@ -1,0 +1,166 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_28.cin
+
+  CommunicationControl (0x28) UDS service implementation, per ES95486-02
+  4.4 (Table 4-18 ~ 4-22) and Annex B.1 (communicationType bit layout).
+
+  Scope note: ES95486-02 Table 4-19 defines 4 controlType values (00
+  enableRxAndTx/01 enableRxAndDisableTx/02 disableRxAndEnableTx/03
+  disableRxAndTx). Only 00 and 03 (both Cvt=M) are implemented - these are
+  the two used by the mandatory ES95486-02 10.2.2 reprogramming sequence
+  (Table 10-2: disableRxAndTx sub-function byte 0x83 = suppress-bit(0x80) |
+  0x03, enableRxAndTx sub-function byte 0x80 = suppress-bit(0x80) | 0x00).
+  01/02 are Cvt=U (optional) and out of scope. Any other controlType
+  returns NRC 0x12 (subFunctionNotSupported).
+
+  IMPORTANT LIMITATION (documented, not a bug): this simulator does not
+  send any periodic "normal communication" CAN messages of its own (it only
+  ever transmits UDS diagnostic responses), so disableRxAndTx/enableRxAndTx
+  have no message traffic to actually suppress. What IS implemented and
+  verifiable is the full protocol surface: request/response byte layout,
+  NRC handling, the suppressPosRspMsgIndicationBit convention (matching the
+  0x83/0x80 wire bytes from ES95486-02 Table 10-7/10-34), the
+  Default-Session block (Table 3-1), and an internal
+  commControlRxTxEnabled flag that other modules could read in the future.
+
+  communicationType parameter (Annex B.1, Table B-1): 1 byte, low nibble
+  (bits 1-0) = message-type selector (00=Reserved/invalid, 01=
+  normalCommunicationMessages, 10=networkManagementCommunicationMessages,
+  11=both), high nibble (bits 7-4) = subnetNumber (0=node+all connected
+  subnets, 1-E=specific subnet, F=receiving network) - this project accepts
+  any high-nibble value (no subnet topology to validate against) but
+  rejects low-nibble==00b (NRC 0x31 requestOutOfRange) since 00 is
+  explicitly Reserved, not a valid message-type selection.
+
+  Behaviour:
+      - Table 3-1: CommunicationControl is X in Default Session, ◆ in
+        Programming/Extended (no SecurityAccess required), X in Safety
+        System Diagnostic Session. Unlike 0x14/0x19/0x11, the Default-
+        Session block IS reachable in this project and is therefore
+        actively enforced here (same inline-check pattern as
+        UDS_Service_27.cin's SecurityAccess Default-Session block).
+      - Per 4.4's session-change rule (cross-referenced from the
+        CommunicationControl research, ES95486-02 4.1): CommunicationControl
+        state is reset (re-enabled) only when the session returns to
+        Default - NOT on every session change (unlike SecurityAccess, which
+        resets on every DiagnosticSessionControl call). See
+        CommunicationControl_ReEnableOnDefaultSession(), called from
+        UDS_Service_10.cin (only when subFunction==Default),
+        UDS_Service_3E.cin's S3 timer (always - S3 timeout always reverts
+        to Default), and SBCM_ECU_Simulator.can's UDS_PerformHardReset().
+
+  The Application Layer must:
+      - #include "UDS_Service_28.cin"
+      - call CommunicationControl_Init() from on preStart (e.g. via
+        UDS_SessionInit())
+      - call Handle_CommunicationControl(data, len) from the UDS request
+        dispatcher
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x28
+                                            CommunicationControl, per
+                                            ES95486-02 4.4. enableRxAndTx
+                                            (0x00) / disableRxAndTx (0x03)
+                                            only.
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_COMMUNICATION_CONTROL = 0x28;
+
+    const byte CTRLTYPE_ENABLE_RX_AND_TX  = 0x00;
+    const byte CTRLTYPE_DISABLE_RX_AND_TX = 0x03;
+
+    byte commControlRxTxEnabled; // 1 = enabled (default/after reset), 0 = disabled
+}
+
+void CommunicationControl_Init()
+{
+    commControlRxTxEnabled = 1;
+}
+
+// See file header - called only when the session is entering/at Default,
+// not on every session change.
+void CommunicationControl_ReEnableOnDefaultSession()
+{
+    commControlRxTxEnabled = 1;
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 / Figure 6 (see UDS_Common.cin
+// for the full chain). "SID supported?" (NRC 0x11) is already handled by the
+// caller's dispatch switch before this function is reached.
+void Handle_CommunicationControl(byte data[], word len)
+{
+    byte controlTypeRaw;
+    byte controlType;
+    byte suppressResponse;
+    byte communicationType;
+    byte responseSid;
+    byte resp[2];
+
+    // Figure 5 step 2: SID supported in the active session? ES95486-02
+    // Table 3-1: X in Default Session - reachable in this project, actively
+    // enforced (same pattern as UDS_Service_27.cin's SecurityAccess check).
+    if (UDS_GetCurrentSession() == SUBFUNC_DEFAULT_SESSION)
+    {
+        AppLayer_SendNegativeResponse(SID_COMMUNICATION_CONTROL,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Figure 6 step 4: minimum length check (SID + sub-function + communicationType = 3).
+    if (len != 3)
+    {
+        AppLayer_SendNegativeResponse(SID_COMMUNICATION_CONTROL,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    controlTypeRaw   = data[1];
+    suppressResponse = (controlTypeRaw & SUBFUNC_SUPPRESS_POSITIVE_RESPONSE) != 0;
+    controlType      = controlTypeRaw & ~SUBFUNC_SUPPRESS_POSITIVE_RESPONSE;
+
+    // Figure 6 step 5: sub-function supported at all? Only enableRxAndTx/
+    // disableRxAndTx are implemented - see file header for scope rationale.
+    if (controlType != CTRLTYPE_ENABLE_RX_AND_TX
+        && controlType != CTRLTYPE_DISABLE_RX_AND_TX)
+    {
+        AppLayer_SendNegativeResponse(SID_COMMUNICATION_CONTROL,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED);
+        return;
+    }
+
+    // Figure 6 step 6: sub-function supported in the active session? "No
+    // restriction" beyond the service-level Default-Session block above.
+
+    // Figure 6 step 7 / ES95486-02 Table 4-22: validate communicationType.
+    communicationType = data[2];
+    if ((communicationType & 0x03) == 0x00)
+    {
+        write("UDS_Service_28: invalid communicationType (0x%02X) - low nibble bits 1-0 are Reserved (00b)", communicationType);
+        AppLayer_SendNegativeResponse(SID_COMMUNICATION_CONTROL,
+                                      NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
+    commControlRxTxEnabled = (controlType == CTRLTYPE_ENABLE_RX_AND_TX) ? 1 : 0;
+
+    if (!suppressResponse)
+    {
+        responseSid = (byte)(SID_COMMUNICATION_CONTROL + SID_POSITIVE_RESPONSE_OFFSET);
+        resp[0] = responseSid;
+        resp[1] = controlType;
+        write("UDS_Service_28: CommunicationControl positive response sent (controlType=0x%02X, communicationType=0x%02X)", controlType, communicationType);
+        NetworkLayer_SendResponse(resp, 2);
+    }
+    else
+    {
+        write("UDS_Service_28: CommunicationControl(controlType=0x%02X) - positive response suppressed", controlType);
+    }
+}

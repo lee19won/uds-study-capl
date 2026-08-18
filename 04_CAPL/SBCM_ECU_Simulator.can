@@ -42,6 +42,28 @@
                                             (SecurityAccess, ASK variant per
                                             ES95486-02 4.3) - include, Init()
                                             call, and SID 0x27 dispatcher case
+  2026-08-18    lee.sungwon@slworld.com    Stage 1 of the ES95486-02 10.2
+                                            reprogramming-sequence services:
+                                            added UDS_Service_11.cin
+                                            (ECUReset, hardReset only),
+                                            UDS_DTC_Store.cin (shared DTC
+                                            state), UDS_Service_14.cin
+                                            (ClearDiagnosticInformation),
+                                            UDS_Service_19.cin
+                                            (ReadDTCInformation, core 3
+                                            sub-functions), UDS_Service_28.cin
+                                            (CommunicationControl),
+                                            UDS_Service_85.cin
+                                            (ControlDTCSetting) - includes,
+                                            Init() calls, dispatcher cases
+                                            for SID 0x11/0x14/0x19/0x28/0x85,
+                                            and the new UDS_PerformHardReset()
+                                            function (called by
+                                            UDS_Service_11.cin's
+                                            Handle_ECUReset()). Stage 2 (0x2E/
+                                            0x2F) and Stage 3 (0x31/0x34/0x35/
+                                            0x36/0x37) follow in later
+                                            changes.
 -----------------------------------------------------------------------------*/
 
 includes
@@ -49,10 +71,16 @@ includes
     #include "UDS_Common.cin"
     #include "NetworkLayer_API.cin"
     #include "VehicleCondition.cin"
+    #include "UDS_DTC_Store.cin"
     #include "UDS_Service_10.cin"
     #include "UDS_Service_3E.cin"
+    #include "UDS_Service_11.cin"
+    #include "UDS_Service_14.cin"
+    #include "UDS_Service_19.cin"
     #include "UDS_Service_22.cin"
     #include "UDS_Service_27.cin"
+    #include "UDS_Service_28.cin"
+    #include "UDS_Service_85.cin"
 }
 
 variables
@@ -65,6 +93,35 @@ on preStart
     VehicleCondition_Init();
     UDS_SessionInit();
     write("SBCM ECU Simulator: UDS services initialized. Waiting for requests on 0x7B0 ...");
+}
+
+// ===========================================================================
+// Called by UDS_Service_11.cin's Handle_ECUReset() (hardReset), AFTER the
+// positive response has already been sent (ES95486-02 4.2). Reinitializes
+// exactly the state a real ECU power-cycle would touch, and deliberately
+// leaves untouched what a real reset would NOT clear:
+//   - Diagnostic session -> Default (UDS_SetCurrentSession)
+//   - SecurityAccess unlock state -> re-locked, but the 3-attempt counter/
+//     180s lockout timer are NOT cleared (SecurityAccess_ResetOnSessionChange()
+//     already encodes this - see UDS_Service_27.cin's revision history for
+//     the security rationale)
+//   - CommunicationControl -> re-enabled (ES95486-02 10.2.2.10 wires an
+//     explicit CommunicationControl(enableRxAndTx) within 15ms of the reset
+//     response anyway, but this also matches 4.1's "return to Default"
+//     reset rule directly)
+//   - ControlDTCSetting -> DTC storage re-enabled (ES95486-02 4.7: "if
+//     ECUReset service is successfully performed, DTC storage resumes")
+//   - NOT reinitialized: stored DTC content (UDS_DTC_Store.cin's dtcStatus[]
+//     persists across a reset in a real ECU - only ClearDiagnosticInformation
+//     (0x14) clears it)
+// ===========================================================================
+void UDS_PerformHardReset()
+{
+    write("SBCM ECU Simulator: ECUReset(hardReset) - reinitializing to Default Session");
+    UDS_SetCurrentSession(SUBFUNC_DEFAULT_SESSION);
+    SecurityAccess_ResetOnSessionChange();
+    CommunicationControl_ReEnableOnDefaultSession();
+    DTC_Store_ReEnableStorageOnDefaultSession();
 }
 
 // ===========================================================================
@@ -85,8 +142,16 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
             UDS_Handle_DiagnosticSessionControl(data, len);
             break;
 
-        case 0x3E:
-            UDS_Handle_TesterPresent(data, len);
+        case 0x11:
+            UDS_Handle_ECUReset(data, len);
+            break;
+
+        case 0x14:
+            UDS_Handle_ClearDiagnosticInformation(data, len);
+            break;
+
+        case 0x19:
+            UDS_Handle_ReadDTCInformation(data, len);
             break;
 
         case 0x22:
@@ -97,6 +162,18 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
             UDS_Handle_SecurityAccess(data, len);
             break;
 
+        case 0x28:
+            UDS_Handle_CommunicationControl(data, len);
+            break;
+
+        case 0x3E:
+            UDS_Handle_TesterPresent(data, len);
+            break;
+
+        case 0x85:
+            UDS_Handle_ControlDTCSetting(data, len);
+            break;
+
         default:
             AppLayer_SendNegativeResponse(sid, NRC_SERVICE_NOT_SUPPORTED);
             break;
@@ -105,10 +182,12 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
 
 void UDS_SessionInit()
 {
+    DTC_Store_Init();
     UDS_Service_10_Init();
     UDS_Service_3E_Init();
     UDS_Service_22_Init();
     UDS_Service_27_Init();
+    CommunicationControl_Init();
 }
 
 void UDS_Handle_DiagnosticSessionControl(byte data[], word len)
@@ -129,6 +208,31 @@ void UDS_Handle_ReadDataByIdentifier(byte data[], word len)
 void UDS_Handle_SecurityAccess(byte data[], word len)
 {
     Handle_SecurityAccess(data, len);
+}
+
+void UDS_Handle_ECUReset(byte data[], word len)
+{
+    Handle_ECUReset(data, len);
+}
+
+void UDS_Handle_ClearDiagnosticInformation(byte data[], word len)
+{
+    Handle_ClearDiagnosticInformation(data, len);
+}
+
+void UDS_Handle_ReadDTCInformation(byte data[], word len)
+{
+    Handle_ReadDTCInformation(data, len);
+}
+
+void UDS_Handle_CommunicationControl(byte data[], word len)
+{
+    Handle_CommunicationControl(data, len);
+}
+
+void UDS_Handle_ControlDTCSetting(byte data[], word len)
+{
+    Handle_ControlDTCSetting(data, len);
 }
 
 // ===========================================================================

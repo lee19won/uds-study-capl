@@ -1,0 +1,170 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_DTC_Store.cin
+
+  Shared DTC (Diagnostic Trouble Code) storage used by three services:
+      - ClearDiagnosticInformation (0x14, UDS_Service_14.cin)
+      - ReadDTCInformation         (0x19, UDS_Service_19.cin)
+      - ControlDTCSetting          (0x85, UDS_Service_85.cin)
+  Not a UDS service itself - a data module, same role as VehicleCondition.cin.
+
+  Sample DTC: this project has exactly ONE simulated DTC, invented for study
+  purposes (NOT a real Hyundai/Kia-assigned DTC - ES95486-02's Annex D
+  defines DTC status-bit semantics but leaves the actual DTC number/content
+  to each ECU's own diagnostic specification, which SBCM does not have in
+  this project):
+
+      DTC_SAMPLE_NUMBER = 0x00B10100 ("B10100")
+
+  3-byte DTC number per SAE J2012-DA_DTCFormat_00 (DTCFormatIdentifier =
+  0x00, the format this project reports - ES95486-02 Table 6-15). The
+  top 2 bits of the high byte (10b) mark it as a "B" (Body) code, since
+  SBCM is a body-domain ECU - the remaining digits are arbitrary.
+
+  statusOfDTC bit layout (ES95486-02 Annex D.2.2, Table D-2) - this project
+  only ever sets/clears the 6 bits below; TestNotCompletedSinceLastClear
+  (0x10) and TestNotCompleteThisOperationCycle (0x40) are never used (this
+  simulator has no "test still running" concept - a test either has not
+  been reported failed, or was just reported failed, instantaneously), so
+  DTC_STATUS_AVAILABILITY_MASK excludes those two bits.
+
+  How a fault gets set: DTC_Debug_SetSampleFailed() / _ClearSampleFailed()
+  below are plain functions with no automatic trigger condition - this is
+  deliberate (the project's vehicle-condition signals, VCU_EvDrvRdySta /
+  BCM_Ign1InSta, are not wired to any real body-domain fault, so tying the
+  sample DTC to them would be fabricating a fault scenario the spec doesn't
+  define). To exercise ReadDTCInformation/ClearDiagnosticInformation during
+  a CANoe measurement, call DTC_Debug_SetSampleFailed() from CANoe's CAPL
+  Browser (right-click the function -> Call) while the simulation node is
+  running - no extra CANoe project configuration (system variables, panels)
+  is required.
+
+  The Application Layer must:
+      - #include "UDS_DTC_Store.cin"
+      - call DTC_Store_Init() from on preStart (e.g. via UDS_SessionInit())
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - shared
+                                            DTC store for the new
+                                            UDS_Service_14.cin (0x14) /
+                                            UDS_Service_19.cin (0x19) /
+                                            UDS_Service_85.cin (0x85),
+                                            per ES95486-02 6.1/6.2/4.7 and
+                                            Annex D.2.
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte DTC_MAX_COUNT = 1; // single sample DTC for this study project
+
+    const dword DTC_SAMPLE_NUMBER = 0x00B10100; // see file header - invented, not a real DTC
+
+    // statusOfDTC bit masks (ES95486-02 Annex D.2.2, Table D-2)
+    const byte DTC_STATUS_TEST_FAILED                     = 0x01;
+    const byte DTC_STATUS_TEST_FAILED_THIS_OP_CYCLE        = 0x02;
+    const byte DTC_STATUS_PENDING                          = 0x04;
+    const byte DTC_STATUS_CONFIRMED                        = 0x08;
+    const byte DTC_STATUS_TEST_NOT_COMPLETED_SINCE_CLEAR   = 0x10; // not used, see header
+    const byte DTC_STATUS_TEST_FAILED_SINCE_CLEAR          = 0x20;
+    const byte DTC_STATUS_TEST_NOT_COMPLETE_THIS_OP_CYCLE  = 0x40; // not used, see header
+    const byte DTC_STATUS_WARNING_INDICATOR_REQUESTED      = 0x80;
+
+    // DTCStatusAvailabilityMask reported in every 0x19 positive response -
+    // the set of status bits this server actually maintains.
+    const byte DTC_STATUS_AVAILABILITY_MASK = 0xAF; // all bits except 0x10/0x40
+
+    byte  dtcStatus[DTC_MAX_COUNT];   // statusOfDTC bitmask for DTC_SAMPLE_NUMBER
+    byte  dtcStorageEnabled;          // 1 = ControlDTCSetting=On (default), 0 = Off
+}
+
+void DTC_Store_Init()
+{
+    byte i;
+    for (i = 0; i < DTC_MAX_COUNT; i++)
+    {
+        dtcStatus[i] = 0x00;
+    }
+    dtcStorageEnabled = 1; // storage enabled by default (ControlDTCSetting=On)
+}
+
+// Called by UDS_Service_85.cin (ControlDTCSetting) and by
+// SBCM_ECU_Simulator.can's UDS_PerformHardReset() / the S3-timeout and
+// DiagnosticSessionControl-to-Default paths (UDS_Service_10.cin /
+// UDS_Service_3E.cin) - ES95486-02 4.7: "if ECUReset service is
+// successfully performed, DTC storage resumes" (the Off state does not
+// survive a return to the Default Session). Only the storage ON/OFF flag
+// is touched here - stored DTC content is untouched (only
+// DTC_Store_ClearAll(), called by ClearDiagnosticInformation, does that).
+void DTC_Store_ReEnableStorageOnDefaultSession()
+{
+    dtcStorageEnabled = 1;
+}
+
+byte DTC_Store_IsStorageEnabled()
+{
+    return dtcStorageEnabled;
+}
+
+// Called by UDS_Service_85.cin (ControlDTCSetting) to explicitly set the
+// storage-enabled flag to the tester-requested value (On=1/Off=2 mapped to
+// 1/0 by the caller).
+void DTC_Store_SetStorageEnabled(byte enabled)
+{
+    dtcStorageEnabled = enabled;
+}
+
+// ES95486-02 6.1: ClearDiagnosticInformation clears the DTC status byte
+// (and snapshot/extended data, not implemented in this project) for every
+// stored DTC. Not gated by dtcStorageEnabled - 4.7 explicitly states
+// ControlDTCSetting=Off does not block ClearDiagnosticInformation.
+void DTC_Store_ClearAll()
+{
+    byte i;
+    for (i = 0; i < DTC_MAX_COUNT; i++)
+    {
+        dtcStatus[i] = 0x00;
+    }
+    write("UDS_DTC_Store: all DTC status cleared");
+}
+
+// Study/demo hook - see file header. Only has effect while DTC storage is
+// enabled (ES95486-02 4.7: DTC status is updated only while
+// ControlDTCSetting=On).
+void DTC_Debug_SetSampleFailed()
+{
+    if (!dtcStorageEnabled)
+    {
+        write("UDS_DTC_Store: DTC_Debug_SetSampleFailed() ignored - DTC storage is currently Off");
+        return;
+    }
+    dtcStatus[0] = DTC_STATUS_TEST_FAILED
+                 | DTC_STATUS_TEST_FAILED_THIS_OP_CYCLE
+                 | DTC_STATUS_PENDING
+                 | DTC_STATUS_CONFIRMED
+                 | DTC_STATUS_TEST_FAILED_SINCE_CLEAR
+                 | DTC_STATUS_WARNING_INDICATOR_REQUESTED;
+    write("UDS_DTC_Store: sample DTC B10100 set to testFailed/confirmed (status=0x%02X)", dtcStatus[0]);
+}
+
+// Study/demo hook - clears just testFailed/testFailedThisOperationCycle/
+// pending/warningIndicatorRequested (simulating the fault condition going
+// away this operation cycle), while leaving confirmedDTC and
+// testFailedSinceLastClear set (matching real DTC aging behavior: a fault
+// that stops recurring is not "confirmed" until ClearDiagnosticInformation
+// or an aging routine clears it - this project has no aging routine, so
+// only an explicit 0x14 request fully clears confirmedDTC).
+void DTC_Debug_ClearSampleFailed()
+{
+    if (!dtcStorageEnabled)
+    {
+        write("UDS_DTC_Store: DTC_Debug_ClearSampleFailed() ignored - DTC storage is currently Off");
+        return;
+    }
+    dtcStatus[0] = dtcStatus[0] & 0xF8; // clear bits 0x01,0x02,0x04 -> keep 0x08,0x10,0x20,0x40,0x80 (0x10/0x40 are always 0 anyway)
+    write("UDS_DTC_Store: sample DTC B10100 testFailed cleared (status=0x%02X)", dtcStatus[0]);
+}

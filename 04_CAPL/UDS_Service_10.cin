@@ -83,6 +83,29 @@
                                             extendedDiagnosticSession ->
                                             non-default, so the general rule
                                             applies unconditionally here.)
+  2026-08-18    lee.sungwon@slworld.com    Added calls to
+                                            CommunicationControl_ReEnableOnDefaultSession()
+                                            (UDS_Service_28.cin) and
+                                            DTC_Store_ReEnableStorageOnDefaultSession()
+                                            (UDS_DTC_Store.cin), but ONLY
+                                            when subFunction==Default -
+                                            unlike SecurityAccess's
+                                            unconditional reset, ES95486-02
+                                            4.1's cross-reference under 4.4/
+                                            4.7 states CommunicationControl/
+                                            ControlDTCSetting settings
+                                            persist across non-default ->
+                                            non-default transitions and are
+                                            reset only on a return to the
+                                            Default Session. Part of the
+                                            ES95486-02 10.2 reprogramming
+                                            sequence implementation (see also
+                                            UDS_Service_11.cin,
+                                            UDS_Service_14.cin,
+                                            UDS_Service_19.cin,
+                                            UDS_Service_28.cin,
+                                            UDS_Service_85.cin,
+                                            UDS_DTC_Store.cin).
 -----------------------------------------------------------------------------*/
 
 variables
@@ -179,6 +202,17 @@ void Handle_DiagnosticSessionControl(byte data[], word len)
     // SecurityAccess rights - unconditionally, even when re-requesting the
     // session that is already active.
     SecurityAccess_ResetOnSessionChange();
+
+    // ES95486-02 4.1: unlike SecurityAccess, CommunicationControl and
+    // ControlDTCSetting state are reset only when the session is entering/
+    // at Default (not on every DSC call - a non-default -> non-default
+    // transition, or re-requesting the same non-default session, leaves
+    // them untouched).
+    if (subFunction == SUBFUNC_DEFAULT_SESSION)
+    {
+        CommunicationControl_ReEnableOnDefaultSession();
+        DTC_Store_ReEnableStorageOnDefaultSession();
+    }
 
     responseSid = (byte)(SID_DIAGNOSTIC_SESSION_CONTROL + SID_POSITIVE_RESPONSE_OFFSET);
     resp[0] = responseSid;

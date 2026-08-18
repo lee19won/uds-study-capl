@@ -1,0 +1,132 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_11.cin
+
+  ECUReset (0x11) UDS service implementation - hardReset (subFunction 0x01)
+  only, per ES95486-02 4.2 (Table 4-5 ~ 4-9).
+
+  Scope note: ES95486-02 Table 4-6 defines 5 resetType values (01 hardReset
+  /02 keyOffOnReset/03 softReset/04 enableRapidPowerShutDown/05
+  disableRapidPowerShutDown). Only hardReset (01, Cvt=M) is implemented here
+  - it is the only one used by the mandatory reprogramming sequence
+  (ES95486-02 10.2.2.9) and the only one marked Mandatory in Table 4-6; the
+  other four are Cvt=U (optional/implementation-specific) and are out of
+  scope for this study project. Requesting any other resetType returns NRC
+  0x12 (subFunctionNotSupported).
+
+  Behaviour implemented here (ES95486-02 4.2, 10.2.2.9):
+      - Table 3-1: ECUReset is "no restriction" (Default/Programming/
+        Extended/Safety all marked possible without SecurityAccess), so no
+        session gate is applied - matches 0x10/0x22/0x3E's existing
+        "always supported" pattern.
+      - Required Engine Condition per Table 3-1: "Engine stop, IGN on" -
+        reuses UDS_IsEngineConditionOk() (VehicleCondition.cin), the same
+        helper already used by UDS_Service_10.cin's Programming Session
+        gate. NRC 0x22 (conditionNotCorrect) if not met.
+      - Per 4.2 ("the ECU shall send the Positive Response... before
+        performing the reset"): the positive response (if not suppressed
+        via the sub-function's bit 7) is sent BEFORE
+        UDS_PerformHardReset() is called.
+      - powerDownTime (response byte #3) is Conditional on resetType==0x04
+        (enableRapidPowerShutDown) per Table 4-7 - since that resetType is
+        out of scope here, the response is always exactly 2 bytes.
+      - UDS_PerformHardReset() itself lives in SBCM_ECU_Simulator.can (the
+        integration point that already owns UDS_SessionInit()) - see that
+        file's header comment for exactly what state is and is NOT
+        reinitialized by a reset.
+
+  The Application Layer must:
+      - #include "UDS_Service_11.cin"
+      - call Handle_ECUReset(data, len) from the UDS request dispatcher
+        (no _Init() needed - this service is stateless)
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x11
+                                            ECUReset, hardReset (0x01) only,
+                                            per ES95486-02 4.2. Part of the
+                                            ES95486-02 10.2 reprogramming
+                                            sequence implementation (also see
+                                            UDS_Service_14.cin,
+                                            UDS_Service_19.cin,
+                                            UDS_Service_28.cin,
+                                            UDS_Service_85.cin, and later the
+                                            0x2E/0x2F/0x31/0x34/0x35/0x36/0x37
+                                            services).
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_ECU_RESET = 0x11;
+
+    const byte SUBFUNC_HARD_RESET = 0x01;
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 / Figure 6 (see UDS_Common.cin
+// for the full chain). "SID supported?" (NRC 0x11) is already handled by the
+// caller's dispatch switch before this function is reached. ECUReset is
+// "no restriction" per Table 3-1, so there is no session gate at Figure 5
+// step 2 (same as 0x10/0x22/0x3E).
+void Handle_ECUReset(byte data[], word len)
+{
+    byte subFunctionRaw;
+    byte subFunction;
+    byte suppressResponse;
+    byte responseSid;
+    byte resp[2];
+
+    // Figure 6 step 4: minimum length check
+    if (len != 2)
+    {
+        AppLayer_SendNegativeResponse(SID_ECU_RESET,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    subFunctionRaw   = data[1];
+    suppressResponse = (subFunctionRaw & SUBFUNC_SUPPRESS_POSITIVE_RESPONSE) != 0;
+    subFunction      = subFunctionRaw & ~SUBFUNC_SUPPRESS_POSITIVE_RESPONSE;
+
+    // Figure 6 step 5: sub-function supported at all? Only hardReset (0x01)
+    // is implemented - see file header for scope rationale.
+    if (subFunction != SUBFUNC_HARD_RESET)
+    {
+        AppLayer_SendNegativeResponse(SID_ECU_RESET,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED);
+        return;
+    }
+
+    // Figure 6 step 6: sub-function supported in the active session? -
+    // "no restriction" per Table 3-1, always true.
+
+    // Figure 6 step 7 / ES95486-02 Table 3-1: ECUReset requires "Engine
+    // stop, IGN on" - reuses the same VehicleCondition.cin helper as
+    // UDS_Service_10.cin's Programming Session gate.
+    if (!UDS_IsEngineConditionOk())
+    {
+        AppLayer_SendNegativeResponse(SID_ECU_RESET,
+                                      NRC_CONDITIONS_NOT_CORRECT);
+        return;
+    }
+
+    // ES95486-02 4.2: send the positive response (unless suppressed) BEFORE
+    // performing the reset.
+    if (!suppressResponse)
+    {
+        responseSid = (byte)(SID_ECU_RESET + SID_POSITIVE_RESPONSE_OFFSET);
+        resp[0] = responseSid;
+        resp[1] = subFunction;
+        write("UDS_Service_11: ECUReset positive response sent (hardReset)");
+        NetworkLayer_SendResponse(resp, 2);
+    }
+    else
+    {
+        write("UDS_Service_11: ECUReset(hardReset) - positive response suppressed");
+    }
+
+    UDS_PerformHardReset();
+}

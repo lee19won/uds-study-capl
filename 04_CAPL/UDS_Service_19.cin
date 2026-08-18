@@ -1,0 +1,206 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_19.cin
+
+  ReadDTCInformation (0x19) UDS service implementation, per ES95486-02 6.2.
+
+  Scope note: ISO 14229-1 defines dozens of sub-functions for this service
+  (snapshot data, extended data, severity, mirror memory, etc.) - this is a
+  deliberate project scoping decision (confirmed with the user 2026-08-18):
+  only the 3 most commonly-used, non-nested sub-functions are implemented:
+      0x01  reportNumberOfDTCByStatusMask
+      0x02  reportDTCByStatusMask
+      0x0A  reportSupportedDTC
+  Any other sub-function returns NRC 0x12 (subFunctionNotSupported). DTC
+  snapshot/extended-data sub-functions are out of scope (they are
+  variable-length/nested per DID, and not needed for this project's
+  ES95486-02 10.2 reprogramming-sequence goal).
+
+  DTC record format (ES95486-02 6.2, Tables 6-16/6-9): 3-byte DTC number
+  (MSB first) + 1-byte statusOfDTC = 4 bytes per record. This project has
+  exactly one sample DTC (UDS_DTC_Store.cin, DTC_SAMPLE_NUMBER).
+
+  DTCFormatIdentifier reported in the reportNumberOfDTCByStatusMask response
+  is 0x00 (SAE J2012-DA_DTCFormat_00, Table 6-15) - matches the 3-byte DTC
+  number format used everywhere in this file.
+
+  Behaviour:
+      - reportNumberOfDTCByStatusMask (0x01): counts how many of this
+        project's DTC(s) have (statusOfDTC & DTCStatusMask) != 0, returns
+        the count as a 2-byte big-endian value.
+      - reportDTCByStatusMask (0x02): returns a 4-byte record for every DTC
+        matching the same mask test (0 or 1 records, since DTC_MAX_COUNT=1).
+      - reportSupportedDTC (0x0A): returns a 4-byte record for every DTC
+        this server implements, regardless of current status (always
+        exactly 1 record for this project).
+      - Table 3-1: ReadDTCInformation is ◆ in Default/Extended, X in Safety
+        System Diagnostic Session. This project never implements/reaches
+        the Safety System session, so the Safety-session block is
+        unreachable and no session-gate code is needed (same reasoning as
+        UDS_Service_14.cin).
+      - Section 6.2.3's own NRC table lists only 0x12/0x13/0x31 - 0x31 is
+        defined for an unrecognized DTCMaskRecord/invalid snapshot record
+        number, neither of which applies to a plain 1-byte DTCStatusMask
+        (every byte value 0x00-0xFF is a valid bitmask), so this
+        implementation never sends NRC 0x31.
+
+  The Application Layer must:
+      - #include "UDS_Service_19.cin"
+      - call Handle_ReadDTCInformation(data, len) from the UDS request
+        dispatcher (no _Init() needed - DTC_Store_Init(), in
+        UDS_DTC_Store.cin, owns the shared DTC state)
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x19
+                                            ReadDTCInformation, per
+                                            ES95486-02 6.2. Core subset:
+                                            reportNumberOfDTCByStatusMask
+                                            (0x01), reportDTCByStatusMask
+                                            (0x02), reportSupportedDTC
+                                            (0x0A) - snapshot/extended-data
+                                            sub-functions out of scope.
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_READ_DTC_INFORMATION = 0x19;
+
+    const byte SUBFUNC_REPORT_NUMBER_OF_DTC_BY_STATUS_MASK = 0x01;
+    const byte SUBFUNC_REPORT_DTC_BY_STATUS_MASK            = 0x02;
+    const byte SUBFUNC_REPORT_SUPPORTED_DTC                 = 0x0A;
+
+    const byte DTC_FORMAT_IDENTIFIER_SAE_J2012_DA_00 = 0x00; // Table 6-15
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 / Figure 6 (see UDS_Common.cin
+// for the full chain). "SID supported?" (NRC 0x11) is already handled by the
+// caller's dispatch switch before this function is reached.
+void Handle_ReadDTCInformation(byte data[], word len)
+{
+    byte subFunction;
+    byte statusMask;
+    byte responseSid;
+    byte resp[2 + 1 + 4 * DTC_MAX_COUNT]; // SID+reportType + AvailMask + up to DTC_MAX_COUNT records
+    byte respLen;
+    byte matchCount;
+    byte i;
+
+    // Figure 5 step 2: SID supported in the active session? "No
+    // restriction" for this project (Safety session is unreachable - see
+    // file header), always true.
+
+    // Figure 6 step 4: minimum length check (need at least SID + sub-function).
+    if (len < 2)
+    {
+        AppLayer_SendNegativeResponse(SID_READ_DTC_INFORMATION,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    subFunction = data[1];
+
+    // Figure 6 step 5: sub-function supported at all? Only the 3-item core
+    // subset (see file header) is implemented.
+    if (subFunction != SUBFUNC_REPORT_NUMBER_OF_DTC_BY_STATUS_MASK
+        && subFunction != SUBFUNC_REPORT_DTC_BY_STATUS_MASK
+        && subFunction != SUBFUNC_REPORT_SUPPORTED_DTC)
+    {
+        AppLayer_SendNegativeResponse(SID_READ_DTC_INFORMATION,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED);
+        return;
+    }
+
+    // Figure 6 step 6: sub-function supported in the active session? "No
+    // restriction" for this project, always true.
+
+    // ---- Figure 6 step 7: specific SID checks / execute service ----
+
+    if (subFunction == SUBFUNC_REPORT_SUPPORTED_DTC)
+    {
+        // 2-byte request: SID + sub-function only.
+        if (len != 2)
+        {
+            AppLayer_SendNegativeResponse(SID_READ_DTC_INFORMATION,
+                                          NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+            return;
+        }
+
+        resp[0] = (byte)(SID_READ_DTC_INFORMATION + SID_POSITIVE_RESPONSE_OFFSET);
+        resp[1] = subFunction;
+        resp[2] = DTC_STATUS_AVAILABILITY_MASK;
+        respLen = 3;
+
+        // Every DTC this server implements is reported, regardless of status.
+        for (i = 0; i < DTC_MAX_COUNT; i++)
+        {
+            resp[respLen + 0] = (byte)((DTC_SAMPLE_NUMBER >> 16) & 0xFF);
+            resp[respLen + 1] = (byte)((DTC_SAMPLE_NUMBER >> 8) & 0xFF);
+            resp[respLen + 2] = (byte)(DTC_SAMPLE_NUMBER & 0xFF);
+            resp[respLen + 3] = dtcStatus[i];
+            respLen = (byte)(respLen + 4);
+        }
+
+        write("UDS_Service_19: reportSupportedDTC positive response sent (%d record(s))", DTC_MAX_COUNT);
+        NetworkLayer_SendResponse(resp, respLen);
+        return;
+    }
+
+    // reportNumberOfDTCByStatusMask (0x01) / reportDTCByStatusMask (0x02):
+    // both take a 1-byte DTCStatusMask -> 3-byte request.
+    if (len != 3)
+    {
+        AppLayer_SendNegativeResponse(SID_READ_DTC_INFORMATION,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+    statusMask = data[2];
+
+    if (subFunction == SUBFUNC_REPORT_NUMBER_OF_DTC_BY_STATUS_MASK)
+    {
+        matchCount = 0;
+        for (i = 0; i < DTC_MAX_COUNT; i++)
+        {
+            if ((dtcStatus[i] & statusMask) != 0)
+            {
+                matchCount++;
+            }
+        }
+
+        resp[0] = (byte)(SID_READ_DTC_INFORMATION + SID_POSITIVE_RESPONSE_OFFSET);
+        resp[1] = subFunction;
+        resp[2] = DTC_STATUS_AVAILABILITY_MASK;
+        resp[3] = DTC_FORMAT_IDENTIFIER_SAE_J2012_DA_00;
+        resp[4] = 0x00;        // DTCCountHighByte (this project never has >255 DTCs)
+        resp[5] = matchCount;  // DTCCountLowByte
+
+        write("UDS_Service_19: reportNumberOfDTCByStatusMask positive response sent (mask=0x%02X, count=%d)", statusMask, matchCount);
+        NetworkLayer_SendResponse(resp, 6);
+        return;
+    }
+
+    // subFunction == SUBFUNC_REPORT_DTC_BY_STATUS_MASK
+    resp[0] = (byte)(SID_READ_DTC_INFORMATION + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[1] = subFunction;
+    resp[2] = DTC_STATUS_AVAILABILITY_MASK;
+    respLen = 3;
+
+    for (i = 0; i < DTC_MAX_COUNT; i++)
+    {
+        if ((dtcStatus[i] & statusMask) != 0)
+        {
+            resp[respLen + 0] = (byte)((DTC_SAMPLE_NUMBER >> 16) & 0xFF);
+            resp[respLen + 1] = (byte)((DTC_SAMPLE_NUMBER >> 8) & 0xFF);
+            resp[respLen + 2] = (byte)(DTC_SAMPLE_NUMBER & 0xFF);
+            resp[respLen + 3] = dtcStatus[i];
+            respLen = (byte)(respLen + 4);
+        }
+    }
+
+    write("UDS_Service_19: reportDTCByStatusMask positive response sent (mask=0x%02X)", statusMask);
+    NetworkLayer_SendResponse(resp, respLen);
+}

@@ -48,6 +48,33 @@
                                             0x37
                                             NRC_REQUIRED_TIME_DELAY_NOT_EXPIRED
                                             (ES95486-02 Table 4-14)
+  2026-08-18    lee.sungwon@slworld.com    Added NRC constants needed by the
+                                            new services (11/14/19/28/2E/2F/
+                                            31/34/35/36/37/85), cross-checked
+                                            against ES95486-02's per-service
+                                            NRC tables: 0x10
+                                            NRC_GENERAL_REJECT (RoutineControl
+                                            checkProgrammingDependencies,
+                                            Table 8-51), 0x70
+                                            NRC_UPLOAD_DOWNLOAD_NOT_ACCEPTED
+                                            and 0x71
+                                            NRC_TRANSFER_DATA_SUSPENDED and
+                                            0x73
+                                            NRC_WRONG_BLOCK_SEQUENCE_COUNTER
+                                            (Upload/Download functional unit,
+                                            Tables 9-3/9-8/9-11), 0x72
+                                            NRC_GENERAL_PROGRAMMING_FAILURE
+                                            (ClearDiagnosticInformation Table
+                                            6-4, WriteDataByIdentifier Table
+                                            5-24, RoutineControl Table 8-5,
+                                            TransferData/RequestTransferExit
+                                            Tables 9-11/9-14), 0x92/0x93
+                                            NRC_VOLTAGE_TOO_HIGH /
+                                            NRC_VOLTAGE_TOO_LOW (TransferData
+                                            Table 9-11 - defined for spec
+                                            completeness; this simulator has
+                                            no voltage model, so these are
+                                            never actually triggered).
 -----------------------------------------------------------------------------*/
 
 variables
@@ -55,6 +82,7 @@ variables
     const byte SID_NEGATIVE_RESPONSE                  = 0x7F;
     const byte SID_POSITIVE_RESPONSE_OFFSET           = 0x40;
 
+    const byte NRC_GENERAL_REJECT                     = 0x10;
     const byte NRC_SERVICE_NOT_SUPPORTED              = 0x11;
     const byte NRC_SUBFUNCTION_NOT_SUPPORTED          = 0x12;
     const byte NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT = 0x13;
@@ -65,7 +93,13 @@ variables
     const byte NRC_INVALID_KEY                        = 0x35;
     const byte NRC_EXCEED_NUMBER_OF_ATTEMPTS          = 0x36;
     const byte NRC_REQUIRED_TIME_DELAY_NOT_EXPIRED    = 0x37;
+    const byte NRC_UPLOAD_DOWNLOAD_NOT_ACCEPTED       = 0x70;
+    const byte NRC_TRANSFER_DATA_SUSPENDED            = 0x71;
+    const byte NRC_GENERAL_PROGRAMMING_FAILURE        = 0x72;
+    const byte NRC_WRONG_BLOCK_SEQUENCE_COUNTER       = 0x73;
     const byte NRC_REQUEST_CORRECTLY_RECEIVED_PENDING = 0x78;
+    const byte NRC_VOLTAGE_TOO_HIGH                   = 0x92;
+    const byte NRC_VOLTAGE_TOO_LOW                    = 0x93;
 
     // ISO 14229-1 Annex A.1 (Table A.1) defines these two distinct codes:
     //   0x7E = sub-functionNotSupportedInActiveSession (SFNSIAS)

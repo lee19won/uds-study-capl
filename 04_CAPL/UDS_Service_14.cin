@@ -1,0 +1,103 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_14.cin
+
+  ClearDiagnosticInformation (0x14) UDS service implementation, per
+  ES95486-02 6.1 (Table 6-2 ~ 6-4).
+
+  This service has NO sub-function byte - its NRC priority order follows
+  Figure 5 (general) then straight into its own "specific SID checks"
+  (same "no sub-function" shape as UDS_Service_22.cin's 0x22, see that
+  file's header comment).
+
+  Behaviour implemented here:
+      - groupOfDTC (3-byte request parameter, ES95486-02 Annex D.1): this
+        project only supports the standard "clear all DTCs" special value
+        0xFFFFFF - any other groupOfDTC returns NRC 0x31 (requestOutOfRange,
+        "groupOfDTC parameter is not supported"), since this project's
+        single sample DTC (UDS_DTC_Store.cin) is not organized into
+        multiple clearable groups.
+      - Per 6.1's implementation rule: DTCs are cleared BEFORE the positive
+        response is sent, and the ECU responds positively even if no DTC
+        was stored (both handled naturally by DTC_Store_ClearAll()
+        unconditionally clearing before NetworkLayer_SendResponse()).
+      - Per 4.7 (ControlDTCSetting) cross-reference: ClearDiagnosticInformation
+        is NOT blocked by ControlDTCSetting=Off - DTC_Store_ClearAll()
+        (UDS_DTC_Store.cin) enforces this by not checking
+        DTC_Store_IsStorageEnabled() at all.
+      - Table 3-1: ClearDiagnosticInformation is ◆ in Default/Extended, X in
+        Safety System Diagnostic Session. This project never implements/
+        reaches the Safety System session (only Default/Programming/
+        Extended sessionTypes are accepted by UDS_Service_10.cin), so the
+        Safety-session block is unreachable and no session-gate code is
+        needed here - same reasoning already applied to 0x10/0x22/0x3E's
+        "always supported" pattern.
+      - NRC 0x72 (generalProgrammingFailure, Cvt=U/optional per Table 6-4)
+        is defined in UDS_Common.cin for spec completeness but is never
+        actually sent by this simulator - there is no real non-volatile
+        memory write here that could fail.
+
+  The Application Layer must:
+      - #include "UDS_Service_14.cin"
+      - call Handle_ClearDiagnosticInformation(data, len) from the UDS
+        request dispatcher (no _Init() needed - DTC_Store_Init(), in
+        UDS_DTC_Store.cin, owns the shared DTC state)
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x14
+                                            ClearDiagnosticInformation, per
+                                            ES95486-02 6.1. "Clear all DTCs"
+                                            (groupOfDTC=0xFFFFFF) only.
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte  SID_CLEAR_DIAGNOSTIC_INFORMATION = 0x14;
+    const dword GROUP_OF_DTC_ALL = 0x00FFFFFF; // ES95486-02 Annex D.1 special value
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 (general) then this service's
+// own specific checks - no sub-function byte, same shape as 0x22 (see
+// UDS_Service_22.cin's header comment).
+void Handle_ClearDiagnosticInformation(byte data[], word len)
+{
+    dword groupOfDTC;
+    byte  responseSid;
+    byte  resp[1];
+
+    // Figure 5 step 2: SID supported in the active session? "No
+    // restriction" for this project (Safety session is unreachable - see
+    // file header), always true.
+
+    // Figure 5 step 3 / specific SID check: minimum length (SID + 3-byte
+    // groupOfDTC = 4 bytes, fixed - no sub-function, no variable payload).
+    if (len != 4)
+    {
+        AppLayer_SendNegativeResponse(SID_CLEAR_DIAGNOSTIC_INFORMATION,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    groupOfDTC = ((dword)data[1] << 16) | ((dword)data[2] << 8) | (dword)data[3];
+
+    if (groupOfDTC != GROUP_OF_DTC_ALL)
+    {
+        write("UDS_Service_14: unsupported groupOfDTC (0x%06X) - only 0xFFFFFF (all DTCs) is supported", groupOfDTC);
+        AppLayer_SendNegativeResponse(SID_CLEAR_DIAGNOSTIC_INFORMATION,
+                                      NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
+    // ES95486-02 6.1: DTCs are cleared before the positive response is sent.
+    DTC_Store_ClearAll();
+
+    responseSid = (byte)(SID_CLEAR_DIAGNOSTIC_INFORMATION + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+    write("UDS_Service_14: ClearDiagnosticInformation positive response sent");
+    NetworkLayer_SendResponse(resp, 1);
+}

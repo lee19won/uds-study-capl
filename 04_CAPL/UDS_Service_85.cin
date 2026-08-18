@@ -1,0 +1,115 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_85.cin
+
+  ControlDTCSetting (0x85) UDS service implementation, per ES95486-02 4.7
+  (Table 4-35 ~ 4-38).
+
+  DTCSettingType values (Table 4-36): only 01 (On) and 02 (Off) are defined
+  in this spec at all (03-7F Reserved) - both are implemented here.
+
+  Behaviour:
+      - Table 3-1: ControlDTCSetting is X in Default Session, ◆ in
+        Programming/Extended (no SecurityAccess required), X in Safety
+        System Diagnostic Session. The Default-Session block is reachable
+        in this project and is actively enforced (same inline-check
+        pattern as UDS_Service_27.cin/UDS_Service_28.cin).
+      - Sets DTC_Store's storage-enabled flag (UDS_DTC_Store.cin) via
+        DTC_Store_SetStorageEnabled() - while Off, UDS_DTC_Store.cin's
+        DTC_Debug_SetSampleFailed()/DTC_Debug_ClearSampleFailed() become
+        no-ops (ES95486-02 4.7: "DTC status is updated when... a
+        ControlDTCSetting request sub-function='On' is received").
+      - Per 4.7's cross-reference (also documented in
+        UDS_Service_14.cin/UDS_DTC_Store.cin): ControlDTCSetting=Off does
+        NOT block ClearDiagnosticInformation, and does NOT survive an
+        ECUReset or a return to the Default Session - both of those revert
+        storage to enabled via DTC_Store_ReEnableStorageOnDefaultSession()
+        (called from UDS_Service_10.cin/UDS_Service_3E.cin/
+        SBCM_ECU_Simulator.can's UDS_PerformHardReset(), the same call
+        sites as CommunicationControl_ReEnableOnDefaultSession()).
+
+  The Application Layer must:
+      - #include "UDS_Service_85.cin"
+      - call Handle_ControlDTCSetting(data, len) from the UDS request
+        dispatcher (no _Init() needed - DTC_Store_Init(), in
+        UDS_DTC_Store.cin, owns the shared storage-enabled state)
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x85
+                                            ControlDTCSetting, per
+                                            ES95486-02 4.7.
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_CONTROL_DTC_SETTING = 0x85;
+
+    const byte DTCSETTINGTYPE_ON  = 0x01;
+    const byte DTCSETTINGTYPE_OFF = 0x02;
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 / Figure 6 (see UDS_Common.cin
+// for the full chain). "SID supported?" (NRC 0x11) is already handled by the
+// caller's dispatch switch before this function is reached.
+void Handle_ControlDTCSetting(byte data[], word len)
+{
+    byte settingTypeRaw;
+    byte settingType;
+    byte suppressResponse;
+    byte responseSid;
+    byte resp[2];
+
+    // Figure 5 step 2: SID supported in the active session? ES95486-02
+    // Table 3-1: X in Default Session - reachable in this project, actively
+    // enforced.
+    if (UDS_GetCurrentSession() == SUBFUNC_DEFAULT_SESSION)
+    {
+        AppLayer_SendNegativeResponse(SID_CONTROL_DTC_SETTING,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Figure 6 step 4: minimum length check (SID + sub-function = 2).
+    if (len != 2)
+    {
+        AppLayer_SendNegativeResponse(SID_CONTROL_DTC_SETTING,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    settingTypeRaw   = data[1];
+    suppressResponse = (settingTypeRaw & SUBFUNC_SUPPRESS_POSITIVE_RESPONSE) != 0;
+    settingType      = settingTypeRaw & ~SUBFUNC_SUPPRESS_POSITIVE_RESPONSE;
+
+    // Figure 6 step 5: sub-function supported at all?
+    if (settingType != DTCSETTINGTYPE_ON && settingType != DTCSETTINGTYPE_OFF)
+    {
+        AppLayer_SendNegativeResponse(SID_CONTROL_DTC_SETTING,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED);
+        return;
+    }
+
+    // Figure 6 step 6: sub-function supported in the active session? "No
+    // restriction" beyond the service-level Default-Session block above.
+
+    // Figure 6 step 7: execute service.
+    DTC_Store_SetStorageEnabled((settingType == DTCSETTINGTYPE_ON) ? 1 : 0);
+
+    if (!suppressResponse)
+    {
+        responseSid = (byte)(SID_CONTROL_DTC_SETTING + SID_POSITIVE_RESPONSE_OFFSET);
+        resp[0] = responseSid;
+        resp[1] = settingType;
+        write("UDS_Service_85: ControlDTCSetting positive response sent (settingType=0x%02X)", settingType);
+        NetworkLayer_SendResponse(resp, 2);
+    }
+    else
+    {
+        write("UDS_Service_85: ControlDTCSetting(settingType=0x%02X) - positive response suppressed", settingType);
+    }
+}

@@ -46,6 +46,17 @@
                                             applies whether the return to
                                             Default happens via an explicit
                                             0x10 request or via S3 timeout.
+  2026-08-18    lee.sungwon@slworld.com    S3 timer handler also calls
+                                            CommunicationControl_ReEnableOnDefaultSession()
+                                            (UDS_Service_28.cin) and
+                                            DTC_Store_ReEnableStorageOnDefaultSession()
+                                            (UDS_DTC_Store.cin), unconditionally
+                                            (S3 timeout always reverts to
+                                            Default) - mirrors the equivalent
+                                            conditional calls added to
+                                            UDS_Service_10.cin. Part of the
+                                            ES95486-02 10.2 reprogramming
+                                            sequence implementation.
 -----------------------------------------------------------------------------*/
 
 variables
@@ -135,4 +146,9 @@ on timer tpS3Timer
     // ES95486-02 4.1, transition rule 4 (non-default -> default): Security
     // settings must be reset here too, not only on an explicit 0x10 request.
     SecurityAccess_ResetOnSessionChange();
+
+    // S3 timeout always reverts to the Default Session, so (unlike
+    // UDS_Service_10.cin's conditional call) these run unconditionally here.
+    CommunicationControl_ReEnableOnDefaultSession();
+    DTC_Store_ReEnableStorageOnDefaultSession();
 }
