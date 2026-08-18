@@ -39,6 +39,15 @@
                                             (English) to all CAPL files; a new
                                             entry will be appended here for
                                             every future CAPL change
+  2026-08-18    lee.sungwon@slworld.com    Added NRC constants needed by the
+                                            new UDS_Service_27.cin
+                                            (SecurityAccess): 0x24
+                                            NRC_REQUEST_SEQUENCE_ERROR, 0x35
+                                            NRC_INVALID_KEY, 0x36
+                                            NRC_EXCEED_NUMBER_OF_ATTEMPTS,
+                                            0x37
+                                            NRC_REQUIRED_TIME_DELAY_NOT_EXPIRED
+                                            (ES95486-02 Table 4-14)
 -----------------------------------------------------------------------------*/
 
 variables
@@ -50,8 +59,12 @@ variables
     const byte NRC_SUBFUNCTION_NOT_SUPPORTED          = 0x12;
     const byte NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT = 0x13;
     const byte NRC_CONDITIONS_NOT_CORRECT             = 0x22;
+    const byte NRC_REQUEST_SEQUENCE_ERROR             = 0x24;
     const byte NRC_REQUEST_OUT_OF_RANGE               = 0x31;
     const byte NRC_SECURITY_ACCESS_DENIED             = 0x33;
+    const byte NRC_INVALID_KEY                        = 0x35;
+    const byte NRC_EXCEED_NUMBER_OF_ATTEMPTS          = 0x36;
+    const byte NRC_REQUIRED_TIME_DELAY_NOT_EXPIRED    = 0x37;
     const byte NRC_REQUEST_CORRECTLY_RECEIVED_PENDING = 0x78;
 
     // ISO 14229-1 Annex A.1 (Table A.1) defines these two distinct codes:

@@ -38,6 +38,10 @@
                                             ES95486-02) and its Init() call,
                                             needed by UDS_Service_10.cin's new
                                             Programming Session condition gate
+  2026-08-18    lee.sungwon@slworld.com    Added UDS_Service_27.cin
+                                            (SecurityAccess, ASK variant per
+                                            ES95486-02 4.3) - include, Init()
+                                            call, and SID 0x27 dispatcher case
 -----------------------------------------------------------------------------*/
 
 includes
@@ -48,6 +52,7 @@ includes
     #include "UDS_Service_10.cin"
     #include "UDS_Service_3E.cin"
     #include "UDS_Service_22.cin"
+    #include "UDS_Service_27.cin"
 }
 
 variables
@@ -88,6 +93,10 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
             UDS_Handle_ReadDataByIdentifier(data, len);
             break;
 
+        case 0x27:
+            UDS_Handle_SecurityAccess(data, len);
+            break;
+
         default:
             AppLayer_SendNegativeResponse(sid, NRC_SERVICE_NOT_SUPPORTED);
             break;
@@ -99,6 +108,7 @@ void UDS_SessionInit()
     UDS_Service_10_Init();
     UDS_Service_3E_Init();
     UDS_Service_22_Init();
+    UDS_Service_27_Init();
 }
 
 void UDS_Handle_DiagnosticSessionControl(byte data[], word len)
@@ -114,6 +124,11 @@ void UDS_Handle_TesterPresent(byte data[], word len)
 void UDS_Handle_ReadDataByIdentifier(byte data[], word len)
 {
     Handle_ReadDataByIdentifier(data, len);
+}
+
+void UDS_Handle_SecurityAccess(byte data[], word len)
+{
+    Handle_SecurityAccess(data, len);
 }
 
 // ===========================================================================

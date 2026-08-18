@@ -53,6 +53,25 @@
                                             Diagnostics Console's negative-response log
                                             makes the exact byte value visible at a
                                             glance without cross-referencing a table.
+  2026-08-18    lee.sungwon@slworld.com    Added SecurityAccessRequestSeed
+                                            (0x27/0x11) and
+                                            SecurityAccessSendKey (0x27/0x12)
+                                            INSTANCEs - ASK variant only, per
+                                            ES95486-02 4.3 and
+                                            04_CAPL/UDS_Service_27.cin. Seed/
+                                            Key are both 8 bytes; the example
+                                            "value" shown for securitySeed/
+                                            securityKey (all-zero) is a
+                                            placeholder only - the ECU
+                                            generates a real random Seed at
+                                            runtime (all-zero only applies
+                                            when already unlocked), and the
+                                            matching Key must be computed via
+                                            the tester-side Seed and Key DLL
+                                            (03_BasicDiagnostics/
+                                            SecurityAccessDLL/
+                                            GenerateKeyExOpt.cpp), not typed
+                                            in manually.
 -->
 <ECU protocol="UDS">
  <NEGATIVE_RESPONSE_CODES>
@@ -125,6 +144,28 @@
   <RESPONSE>
    <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="50" semantics="SID CONST MOTOROLA" convId=""/>
    <PARAMETER id="diagnosticSessionType" bitPos="15" bitLen="8" type="none" unit="" value="03" semantics="XID CONST MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="SecurityAccessRequestSeed">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="27" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="securityAccessType" bitPos="15" bitLen="8" type="none" unit="" value="11" semantics="XID CONST MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="67" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="securityAccessType" bitPos="15" bitLen="8" type="none" unit="" value="11" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="securitySeed" bitPos="23" bitLen="64" type="none" unit="" value="00 00 00 00 00 00 00 00" semantics="MOTOROLA" convId=""/>
+  </RESPONSE>
+ </INSTANCE>
+ <INSTANCE id="SecurityAccessSendKey">
+  <REQUEST>
+   <PARAMETER id="SID_RQ" bitPos="7" bitLen="8" type="none" unit="" value="27" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="securityAccessType" bitPos="15" bitLen="8" type="none" unit="" value="12" semantics="XID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="securityKey" bitPos="23" bitLen="64" type="none" unit="" value="00 00 00 00 00 00 00 00" semantics="MOTOROLA" convId=""/>
+  </REQUEST>
+  <RESPONSE>
+   <PARAMETER id="SID_PR" bitPos="7" bitLen="8" type="none" unit="" value="67" semantics="SID CONST MOTOROLA" convId=""/>
+   <PARAMETER id="securityAccessType" bitPos="15" bitLen="8" type="none" unit="" value="12" semantics="XID CONST MOTOROLA" convId=""/>
   </RESPONSE>
  </INSTANCE>
  <INSTANCE id="TesterPresent">

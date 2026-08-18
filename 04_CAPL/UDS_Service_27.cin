@@ -1,0 +1,390 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_27.cin
+
+  SecurityAccess (0x27) UDS service implementation - Type#2 "Advanced
+  Seed/Key" (ASK) per ES95486-02 4.3 (Table 4-10 ~ 4-14):
+      subFunction 0x11 = requestSeedType#2 (ASK), Seed = 8 byte
+      subFunction 0x12 = sendKey (ASK),            Key  = 8 byte
+
+  Seed->Key algorithm (project-defined; ES95486-02 4.3 explicitly leaves the
+  algorithm itself up to each ECU vendor - "'Key'는 'Seed'를 이용하여
+  Security Algorithm으로 계산된 값으로, Security Algorithm은 각 제어기
+  업체에서 정의한다."):
+
+      Key[i] = (Seed[i] + 0x2A) & 0xFF,  i = 0..7
+
+  In words: add the fixed constant 0x2A (42) to each Seed byte, wrapping
+  around (mod 256) if the sum exceeds 0xFF. Deliberately the simplest
+  possible transform - plain byte addition, one constant, no bit tricks -
+  so it can be hand-verified with a calculator. NOT a real vehicle
+  security algorithm. The exact same formula is implemented in the CANoe
+  tester-side Seed&Key DLL (03_BasicDiagnostics/SecurityAccessDLL/
+  GenerateKeyExOpt.cpp) so the two sides agree.
+
+  ES95486-02 4.3 behaviour implemented here:
+      - requestSeed while already unlocked -> Seed = all-zero (8 bytes)
+      - requestSeed while a 180s lockout is active -> NRC 0x37
+        (requiredTimeDelayNotExpired)
+      - sendKey without a prior (unconsumed) requestSeed -> NRC 0x24
+        (requestSequenceError)
+      - sendKey with a wrong key -> NRC 0x35 (invalidKey), attempt counter++
+      - 3rd consecutive wrong key -> NRC 0x36 (exceededNumberOfAttempts) and
+        a 180 second lockout begins (ES95486-02 4.3, Figure 4-2)
+      - sendKey while already unlocked -> always accepted (key content is
+        not re-checked once unlocked; ES95486-02 does not specify this
+        edge case, this is a project simplification)
+
+  Random seed generation: CAPL's built-in random-number function could not
+  be verified against official documentation before this file was written
+  (see project chat log 2026-08-18), so - to avoid the risk of a compile
+  error from an unverified function call - seed bytes are produced by a
+  simple hand-rolled linear congruential generator (LCG) using only the
+  plain arithmetic/bitwise operators already used elsewhere in this
+  codebase. This is adequate for a study project (the spec's only
+  requirement is "not 0000/FFFF" for the 2-byte case; this project applies
+  the analogous "not all-0x00 / not all-0xFF" rule to the 8-byte case) but
+  is NOT cryptographically random and IS fully reproducible run-to-run
+  (same sequence every time CANoe measurement is (re)started). That is an
+  intentional, documented simplification for a teaching tool, not an
+  oversight.
+
+  The Application Layer must:
+      - #include "UDS_Service_27.cin"
+      - call UDS_Service_27_Init() from on preStart (e.g. via UDS_SessionInit())
+      - call Handle_SecurityAccess(data, len) from the UDS request dispatcher
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x27
+                                            SecurityAccess, ASK variant only
+                                            (subFunction 0x11/0x12, 8-byte
+                                            Seed/Key), per ES95486-02 4.3.
+                                            Matching tester-side Seed&Key DLL:
+                                            03_BasicDiagnostics/
+                                            SecurityAccessDLL/
+                                            GenerateKeyExOpt.c
+  2026-08-18    lee.sungwon@slworld.com    Fixed a CAPL compile error: "key"
+                                            is a reserved word and cannot be
+                                            used as an identifier: renamed
+                                            SecurityAccess_ComputeKey()'s
+                                            "key" parameter to "nKey".
+  2026-08-18    lee.sungwon@slworld.com    Replaced the Seed->Key algorithm
+                                            with a much simpler one, per
+                                            request: was
+                                            Key[i]=ROL3(Seed[i] XOR MASK[i])
+                                            (byte XOR + bit rotation), now
+                                            Key[i]=(Seed[i]+0x2A) & 0xFF
+                                            (plain byte addition with one
+                                            constant, wrapping at 256).
+                                            Removed the now-unused
+                                            SA_KEY_MASK[] array and its
+                                            Init()-time fill loop. Matching
+                                            tester-side DLL
+                                            (GenerateKeyExOpt.cpp) and the
+                                            independent Python cross-check
+                                            (verify_algorithm.py) updated to
+                                            match in the same change.
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_SECURITY_ACCESS = 0x27;
+
+    const byte SUBFUNC_REQUEST_SEED_ASK = 0x11;
+    const byte SUBFUNC_SEND_KEY_ASK     = 0x12;
+
+    const byte SA_SEED_LEN = 8;
+    const byte SA_KEY_LEN  = 8;
+
+    // req length = SID + subFunction                    = 2
+    // resp length (requestSeed) = SID_PR + subFunction + Seed(8) = 10
+    const byte SA_REQUEST_SEED_REQ_LEN  = 2;
+    const byte SA_SEND_KEY_REQ_LEN      = 2 + 8; // SID + subFunction + Key(8)
+
+    const byte SA_MAX_ATTEMPTS       = 3;
+    const dword SA_LOCKOUT_TIME_MS   = 180000; // ES95486-02 4.3: 180 s
+
+    // Seed->Key algorithm constant - see file header: Key[i] = (Seed[i] + SA_KEY_ADD_CONST) & 0xFF
+    const byte SA_KEY_ADD_CONST = 0x2A;
+
+    byte    securityUnlocked;      // 1 = SecurityAccess currently granted
+    byte    securitySeedIssued;    // 1 = a requestSeed response is pending a sendKey
+    byte    securityAttemptCount;  // consecutive wrong-key count (0..SA_MAX_ATTEMPTS)
+    byte    securityLockoutActive; // 1 while the 180s lockout timer is running
+    byte    securityLastSeed[SA_SEED_LEN];
+
+    dword   securityLcgState;      // simple LCG state for seed generation
+    msTimer securityLockoutTimer;
+}
+
+// ===========================================================================
+// Must be called once from the Application Layer "on preStart"
+// (e.g. from UDS_SessionInit()) before any 0x27 request is handled.
+// ===========================================================================
+void UDS_Service_27_Init()
+{
+    byte i;
+
+    securityUnlocked      = 0;
+    securitySeedIssued     = 0;
+    securityAttemptCount   = 0;
+    securityLockoutActive  = 0;
+    for (i = 0; i < SA_SEED_LEN; i++)
+    {
+        securityLastSeed[i] = 0;
+    }
+
+    // Fixed, non-zero starting state so the LCG sequence is reproducible
+    // across measurement runs (see file header - intentional for a study
+    // project). Any non-zero dword works as the initial state.
+    securityLcgState = 0x2A7F3C11;
+
+    cancelTimer(securityLockoutTimer);
+}
+
+// ===========================================================================
+// Seed->Key transform - see file header for the algorithm definition.
+// Must stay byte-for-byte identical to GenerateKeyExOpt.cpp on the tester
+// side.
+// ===========================================================================
+void SecurityAccess_ComputeKey(byte seed[], byte nKey[])
+{
+    byte i;
+
+    for (i = 0; i < SA_SEED_LEN; i++)
+    {
+        nKey[i] = (byte)((seed[i] + SA_KEY_ADD_CONST) & 0xFF);
+    }
+}
+
+// ===========================================================================
+// Advances the internal LCG and fills seed[] with 8 pseudo-random bytes.
+// Regenerates if the result happens to be all-0x00 or all-0xFF (ES95486-02
+// 4.3's "not 0000/FFFF" rule, extended to 8 bytes for the ASK variant).
+// ===========================================================================
+void SecurityAccess_GenerateSeed(byte seed[])
+{
+    byte i;
+    byte allZero;
+    byte allFF;
+
+    do
+    {
+        allZero = 1;
+        allFF   = 1;
+        for (i = 0; i < SA_SEED_LEN; i++)
+        {
+            // Classic LCG: state = state * A + C (32-bit, silently wraps)
+            securityLcgState = securityLcgState * 1103515245 + 12345;
+            seed[i] = (byte)((securityLcgState >> 16) & 0xFF);
+
+            if (seed[i] != 0x00)
+            {
+                allZero = 0;
+            }
+            if (seed[i] != 0xFF)
+            {
+                allFF = 0;
+            }
+        }
+    }
+    while (allZero || allFF);
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 / Figure 6 (see UDS_Common.cin
+// for the full chain). "SID supported?" (NRC 0x11) is already handled by the
+// caller's dispatch switch before this function is reached. Unlike this
+// simulator's other sub-functioned services, 0x27's two sub-functions
+// (requestSeed / sendKey) do not share one fixed request length, so the
+// exact-length check is done per sub-function as part of Figure 6 step 7
+// ("specific SID checks"), after the sub-function itself has been
+// identified as valid (step 5) - see UDS_Service_22.cin's header comment
+// for the same "single fixed shape vs. per-shape check" distinction.
+void Handle_SecurityAccess(byte data[], word len)
+{
+    byte subFunction;
+    byte responseSid;
+    byte resp[2 + SA_SEED_LEN];
+    byte receivedKey[SA_KEY_LEN];
+    byte expectedKey[SA_KEY_LEN];
+    byte keyMatches;
+    byte i;
+
+    // Figure 5 step 2: SID supported in the active session?
+    if (!UDS_IsServiceSupportedInSession())
+    {
+        AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Figure 6 step 4: minimum length check (need at least SID + subFunction
+    // to identify which sub-function this is).
+    if (len < 2)
+    {
+        AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    subFunction = data[1];
+
+    // Figure 6 step 5: sub-function supported at all? This simulator only
+    // implements the ASK variant (0x11/0x12); Normal (0x01/0x0B/0x02/0x0C)
+    // and Certificate-based (0x41/0x42) variants are out of scope.
+    if (subFunction != SUBFUNC_REQUEST_SEED_ASK
+        && subFunction != SUBFUNC_SEND_KEY_ASK)
+    {
+        AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED);
+        return;
+    }
+
+    // Figure 6 step 6: sub-function supported in the active session?
+    if (!UDS_IsSubFunctionSupportedInSession())
+    {
+        AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // ---- Figure 6 step 7: specific SID checks / execute service ----
+
+    if (subFunction == SUBFUNC_REQUEST_SEED_ASK)
+    {
+        if (len != SA_REQUEST_SEED_REQ_LEN)
+        {
+            AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                          NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+            return;
+        }
+
+        // ES95486-02 4.3: "If the tester request seed to the ECU during
+        // this [180s] time delay, the ECU will send negative response
+        // code, requiredTimeDelayNotExpired."
+        if (securityLockoutActive)
+        {
+            AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                          NRC_REQUIRED_TIME_DELAY_NOT_EXPIRED);
+            return;
+        }
+
+        if (securityUnlocked)
+        {
+            // ES95486-02 4.3: already-unlocked ECUs respond to requestSeed
+            // with an all-zero Seed.
+            for (i = 0; i < SA_SEED_LEN; i++)
+            {
+                securityLastSeed[i] = 0;
+            }
+        }
+        else
+        {
+            SecurityAccess_GenerateSeed(securityLastSeed);
+        }
+        securitySeedIssued = 1;
+
+        responseSid = (byte)(SID_SECURITY_ACCESS + SID_POSITIVE_RESPONSE_OFFSET);
+        resp[0] = responseSid;
+        resp[1] = subFunction;
+        for (i = 0; i < SA_SEED_LEN; i++)
+        {
+            resp[2 + i] = securityLastSeed[i];
+        }
+
+        write("UDS_Service_27: requestSeed positive response sent (unlocked=%d)", securityUnlocked);
+        NetworkLayer_SendResponse(resp, (word)(2 + SA_SEED_LEN));
+        return;
+    }
+
+    // subFunction == SUBFUNC_SEND_KEY_ASK
+    if (len != SA_SEND_KEY_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    // ES95486-02 4.3, Table 4-14: "Send if the 'sendKey' sub-function is
+    // received without first receiving a 'requestSeed' request message."
+    if (!securitySeedIssued)
+    {
+        AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                      NRC_REQUEST_SEQUENCE_ERROR);
+        return;
+    }
+    // A seed can only ever be used for one sendKey attempt.
+    securitySeedIssued = 0;
+
+    if (securityUnlocked)
+    {
+        // Already unlocked: accept unconditionally (key content is not
+        // re-validated once security is granted). See file header note.
+        responseSid = (byte)(SID_SECURITY_ACCESS + SID_POSITIVE_RESPONSE_OFFSET);
+        resp[0] = responseSid;
+        resp[1] = subFunction;
+        write("UDS_Service_27: sendKey accepted (already unlocked)");
+        NetworkLayer_SendResponse(resp, 2);
+        return;
+    }
+
+    for (i = 0; i < SA_KEY_LEN; i++)
+    {
+        receivedKey[i] = data[2 + i];
+    }
+    SecurityAccess_ComputeKey(securityLastSeed, expectedKey);
+
+    keyMatches = 1;
+    for (i = 0; i < SA_KEY_LEN; i++)
+    {
+        if (receivedKey[i] != expectedKey[i])
+        {
+            keyMatches = 0;
+            break;
+        }
+    }
+
+    if (keyMatches)
+    {
+        securityUnlocked     = 1;
+        securityAttemptCount = 0;
+
+        responseSid = (byte)(SID_SECURITY_ACCESS + SID_POSITIVE_RESPONSE_OFFSET);
+        resp[0] = responseSid;
+        resp[1] = subFunction;
+        write("UDS_Service_27: sendKey positive response sent (unlocked)");
+        NetworkLayer_SendResponse(resp, 2);
+        return;
+    }
+
+    // Wrong key.
+    securityAttemptCount++;
+    if (securityAttemptCount >= SA_MAX_ATTEMPTS)
+    {
+        // ES95486-02 4.3, Figure 4-2: 3rd consecutive failure -> NRC 0x36
+        // and a 180s lockout begins.
+        securityLockoutActive = 1;
+        setTimer(securityLockoutTimer, SA_LOCKOUT_TIME_MS);
+        write("UDS_Service_27: sendKey failed 3x - locking out for %d ms", SA_LOCKOUT_TIME_MS);
+        AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                      NRC_EXCEED_NUMBER_OF_ATTEMPTS);
+    }
+    else
+    {
+        write("UDS_Service_27: sendKey invalid (attempt %d/%d)", securityAttemptCount, SA_MAX_ATTEMPTS);
+        AppLayer_SendNegativeResponse(SID_SECURITY_ACCESS,
+                                      NRC_INVALID_KEY);
+    }
+}
+
+on timer securityLockoutTimer
+{
+    securityLockoutActive = 0;
+    securityAttemptCount  = 0;
+    write("UDS_Service_27: 180s lockout expired - SecurityAccess attempts allowed again");
+}
