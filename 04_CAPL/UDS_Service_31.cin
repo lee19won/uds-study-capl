@@ -1,0 +1,202 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_31.cin
+
+  RoutineControl (0x31) UDS service implementation, per ES95486-02 8.1
+  (Table 8-1 ~ 8-5) and 8.1.4.8 (CheckProgrammingDependancy).
+
+  Only the ES95486-02 10.2 reprogramming sequence's two routines are
+  implemented (8.1: "Reprogram routine (eraseMemory,
+  checkProgrammingDependencies) has to be secured by respective ECU
+  security option"):
+      routineIdentifier 0xFF00  eraseMemory (Calibration Data & Program)
+      routineIdentifier 0xFF01  checkProgrammingDependencies
+  Any other routineIdentifier (including the OTA/FoD-specific ranges in
+  Table 8-3, which this simulator does not implement) -> NRC 0x31.
+
+  Only the startRoutine (0x01) sub-function is implemented; stopRoutine
+  (0x02) and requestRoutineResults (0x03) are Cvt=U (optional, Table 8-2)
+  and are not needed for either routine in this simulator - both
+  routines complete synchronously within the startRoutine call itself
+  (there is no real flash memory to erase, and no real checksum to
+  verify, so "start" and "finish" happen in the same request/response
+  cycle) -> requesting 0x02/0x03 gets NRC 0x12 (subFunctionNotSupported).
+
+  Neither routine's optional routineControlOptionRecord is implemented
+  (Table 8-47/8-49's MemoryArea / SWUnitMemoryArea parameters are
+  Conditional on OTA / multi-SWUnit support, which this simulator does
+  not have) - only the bare 4-byte request/response shown in
+  ES95486-02's own worked example is accepted:
+      Request:  31 01 FF 00   (Table 10-11: RoutineControl (eraseMemory))
+      Response: 71 01 FF 00
+  This project's other worked-example-driven services (UDS_Service_2E/
+  2F.cin) apply the same "match the concrete worked example over the
+  generic optional-parameter grammar" simplification.
+
+  IMPORTANT session/security design note: ES95486-02 Table 3-1 marks
+  RoutineControl (31 hex) with the Circle symbol ("Specific sub-function
+  possible in the selected diag. Mode (see each function descriptions)")
+  in EVERY session, including the Default Session - unlike every other
+  gated service in this project (0x27/0x28/0x2E/0x2F/0x85), which are
+  marked X (impossible) in specific sessions and are blocked with an
+  explicit up-front session check. RoutineControl's gating is instead
+  delegated entirely to "each function description" - for eraseMemory
+  and checkProgrammingDependencies, that description (8.1, quoted above)
+  is purely a security requirement, not a session requirement. This file
+  therefore does NOT block the Default Session up front; instead it
+  relies on the SecurityAccess-unlocked check below, which is
+  necessarily false in the Default Session anyway (SecurityAccess itself
+  is X/blocked there - UDS_Service_27.cin), and so a Default-Session
+  request naturally and correctly receives NRC 0x33
+  (securityAccessDenied) rather than NRC 0x7F.
+
+  The Application Layer must:
+      - #include "UDS_Service_31.cin"
+      - call Handle_RoutineControl(data, len) from the UDS request
+        dispatcher (no _Init() needed - this module holds no persistent
+        state of its own; eraseMemory resets UDS_Service_34_35_36_37.cin's
+        transfer-session state via TransferSession_Reset())
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x31
+                                            RoutineControl, startRoutine
+                                            only, routineIdentifier
+                                            0xFF00 (eraseMemory) and
+                                            0xFF01 (checkProgramming
+                                            Dependencies), per ES95486-02
+                                            8.1 / 8.1.4.8 and the Table
+                                            10-11 worked example. Stage 3
+                                            of the ES95486-02 10.2
+                                            reprogramming sequence
+                                            implementation (see also
+                                            UDS_Service_34_35_36_37.cin).
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_ROUTINE_CONTROL = 0x31;
+
+    const byte RC_START_ROUTINE = 0x01;
+    // stopRoutine (0x02) / requestRoutineResults (0x03) are recognized as
+    // valid sub-function VALUES (so an unrecognized value still correctly
+    // gets NRC 0x12, not NRC 0x31) but are not supported by either routine
+    // this simulator implements - see file header.
+    const byte RC_STOP_ROUTINE            = 0x02;
+    const byte RC_REQUEST_ROUTINE_RESULTS = 0x03;
+
+    const word RID_ERASE_MEMORY                   = 0xFF00;
+    const word RID_CHECK_PROGRAMMING_DEPENDENCIES = 0xFF01;
+
+    // Request/response length: SID + routineControlType + routineIdentifier(2)
+    const byte RC_REQ_LEN = 4;
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 (see UDS_Common.cin for the
+// full chain) / Figure 8-1 (Key 1: "at least 4 (SI+SubFunction+RID
+// Parameter)"). Unlike this simulator's other session-gated services, no
+// up-front session block is applied here - see the file header's
+// "IMPORTANT session/security design note".
+void Handle_RoutineControl(byte data[], word len)
+{
+    byte routineControlType;
+    word rid;
+    byte responseSid;
+    byte resp[4];
+
+    // Figure 8-1 Key 1: minimum length check (need at least SID +
+    // routineControlType + routineIdentifier to identify the request).
+    if (len < RC_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    routineControlType = data[1];
+
+    // Sub-function supported at all? (Table 8-2 defines 01/02/03; this
+    // simulator implements only startRoutine - see file header.)
+    if (routineControlType != RC_START_ROUTINE
+        && routineControlType != RC_STOP_ROUTINE
+        && routineControlType != RC_REQUEST_ROUTINE_RESULTS)
+    {
+        AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED);
+        return;
+    }
+    if (routineControlType != RC_START_ROUTINE)
+    {
+        write("UDS_Service_31: stopRoutine/requestRoutineResults not supported "
+              "(routineControlType=0x%02X) - both implemented routines complete "
+              "synchronously within startRoutine", routineControlType);
+        AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
+                                      NRC_SUBFUNCTION_NOT_SUPPORTED);
+        return;
+    }
+
+    rid = ((word)data[2] << 8) | data[3];
+
+    // Table 8-5, NRC 0x31 cause #1: "The server does not supported the
+    // requested routineIdentifier."
+    if (rid != RID_ERASE_MEMORY && rid != RID_CHECK_PROGRAMMING_DEPENDENCIES)
+    {
+        write("UDS_Service_31: Unsupported routineIdentifier (0x%04X)", rid);
+        AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
+                                      NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
+    // Exact length check: this simulator does not support a
+    // routineControlOptionRecord for either routine (see file header).
+    if (len != RC_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    // ES95486-02 8.1: both routines "have to be secured by respective ECU
+    // security option". See file header for why this is the ONLY gating
+    // check here (no up-front session block).
+    if (!SecurityAccess_IsUnlocked())
+    {
+        AppLayer_SendNegativeResponse(SID_ROUTINE_CONTROL,
+                                      NRC_SECURITY_ACCESS_DENIED);
+        return;
+    }
+
+    // ---- Execute ----
+    if (rid == RID_ERASE_MEMORY)
+    {
+        // No real flash memory exists in this simulator; "erasing" it is
+        // modeled as clearing any prior/in-progress transfer session, so a
+        // fresh RequestDownload can start cleanly afterwards - matching the
+        // real sequence (Table 10-2: eraseMemory always precedes the first
+        // RequestDownload of the application software).
+        TransferSession_Reset();
+        write("UDS_Service_31: eraseMemory (0xFF00) - simulated, transfer session reset");
+    }
+    else // RID_CHECK_PROGRAMMING_DEPENDENCIES
+    {
+        // No real integrity/checksum check is possible without real flash
+        // content; this simulator always reports success. A real ECU would
+        // verify the downloaded software here and could fail with NRC 0x72
+        // (generalProgrammingFailure) - documented as an intentional
+        // simplification for a study project.
+        write("UDS_Service_31: checkProgrammingDependencies (0xFF01) - simulated, always succeeds");
+    }
+
+    responseSid = (byte)(SID_ROUTINE_CONTROL + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+    resp[1] = routineControlType;
+    resp[2] = data[2];
+    resp[3] = data[3];
+
+    write("UDS_Service_31: RoutineControl positive response sent (RID=0x%04X)", rid);
+    NetworkLayer_SendResponse(resp, RC_REQ_LEN);
+}

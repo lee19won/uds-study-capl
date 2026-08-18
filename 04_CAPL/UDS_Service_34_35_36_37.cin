@@ -1,0 +1,527 @@
+/*@!Encoding:1252*/
+/*===========================================================================
+  UDS_Service_34_35_36_37.cin
+
+  RequestDownload (0x34) / RequestUpload (0x35) / TransferData (0x36) /
+  RequestTransferExit (0x37) UDS service implementation, per ES95486-02
+  9.1 ~ 9.4 (Table 9-1 ~ 9-14) and the Table 10-12/10-13/10-16 worked
+  examples. Bundled into one file (mirroring UDS_Service_27.cin's two
+  SecurityAccess sub-functions) because all four services share one
+  transfer-session state machine: a request cannot be understood without
+  knowing whether a RequestDownload or RequestUpload is currently active.
+
+  IMPORTANT SIMULATION LIMITATION: this project has no real non-volatile
+  server memory to program. TransferData does not write bytes to (or read
+  bytes from) any actual buffer - it only counts bytes transferred against
+  the memorySize negotiated by RequestDownload/RequestUpload, and (for
+  uploads only, since there is no real source data) returns a small
+  deterministic filler pattern. This is sufficient to exercise the real
+  protocol state machine (blockSequenceCounter sequencing, size
+  accounting, NRC 0x71/0x73) end-to-end, which is this study project's
+  goal, without needing a simulated flash image.
+
+  Format simplifications (all confirmed against ES95486-02's OWN worked
+  example, Table 10-12, which uses exactly these values - not just this
+  project's invention):
+      dataFormatIdentifier            : only 0x00 (no compression/
+                                         encryption) is accepted - "적어도
+                                         00 이란 dataFormIdentifier는
+                                         지원해야 한다" (9.1.4).
+      addressAndLengthFormatIdentifier: only 0x33 is accepted (3-byte
+                                         memoryAddress, 3-byte memorySize).
+      maxNumberOfBlockLength          : fixed at 255 (0x00FF), returned as
+                                         lengthFormatIdentifier=0x20 (2-byte
+                                         field) - exactly Table 10-12's
+                                         "74 20 00 FF".
+  transferRequestParameterRecord (RequestTransferExit) and
+  routineControlOptionRecord-equivalent extra parameters are not
+  supported by this simulator - Table 10-16's worked example uses a bare
+  1-byte RequestTransferExit request ("37") and 1-byte response ("77")
+  with no parameters, which is what is implemented here.
+
+  ES95486-02 Table 3-1: all four services are X (not supported) in the
+  Default Session, Diamond (security required) in Programming/Extended
+  sessions, with Engine Condition "Engine stop, IGN on" (same condition
+  reused from UDS_Service_2E.cin / UDS_Service_11.cin).
+
+  blockSequenceCounter handling (9.3, "Example use cases" a-d): the first
+  TransferData following RequestDownload/RequestUpload must use
+  blockSequenceCounter=1, incrementing by 1 per subsequent block and
+  wrapping FF->00. A TransferData request repeating the exact
+  blockSequenceCounter of the last ACCEPTED block is treated as a
+  retransmission (network-layer timeout on the tester side) and is
+  re-acknowledged without being processed again (no double-counting of
+  transferred bytes) - implemented via transferLastBsc/
+  transferHasLastBsc/transferLastBlockBytes below. Any other unexpected
+  value is NRC 0x73 (wrongBlockSequenceCounter). This project does not
+  attempt to distinguish an exact-retransmission from a genuinely new
+  block at the 0xFF->0x00 wrap boundary with full rigor (an
+  edge-of-edge-case even real implementations rarely exercise) - documented
+  simplification for a study project.
+
+  The Application Layer must:
+      - #include "UDS_Service_34_35_36_37.cin"
+      - call UDS_Service_34_35_36_37_Init() from on preStart (e.g. via
+        UDS_SessionInit())
+      - call Handle_RequestDownload(data, len) / Handle_RequestUpload(data,
+        len) / Handle_TransferData(data, len) /
+        Handle_RequestTransferExit(data, len) from the UDS request
+        dispatcher
+      - UDS_Service_31.cin's eraseMemory routine calls
+        TransferSession_Reset() directly (a fresh erase clears any
+        in-progress transfer)
+===========================================================================*/
+/*---------------------------------------------------------------------------
+  Revision History
+  Project: UDS Study
+-----------------------------------------------------------------------------
+  Date          Author                      Description
+-----------------------------------------------------------------------------
+  2026-08-18    lee.sungwon@slworld.com    Initial implementation - 0x34/
+                                            0x35/0x36/0x37 RequestDownload/
+                                            RequestUpload/TransferData/
+                                            RequestTransferExit, format
+                                            fixed to match the ES95486-02
+                                            Table 10-12/10-13/10-16 worked
+                                            example exactly (dataFormat
+                                            Identifier=0x00,
+                                            addressAndLengthFormatIdentifier
+                                            =0x33, maxNumberOfBlockLength=
+                                            255). No real memory buffer -
+                                            byte-count accounting only,
+                                            with simulated filler data for
+                                            uploads. Stage 3 (final stage)
+                                            of the ES95486-02 10.2
+                                            reprogramming sequence
+                                            implementation (see also
+                                            UDS_Service_31.cin).
+-----------------------------------------------------------------------------*/
+
+variables
+{
+    const byte SID_REQUEST_DOWNLOAD      = 0x34;
+    const byte SID_REQUEST_UPLOAD        = 0x35;
+    const byte SID_TRANSFER_DATA         = 0x36;
+    const byte SID_REQUEST_TRANSFER_EXIT = 0x37;
+
+    const byte DFI_NO_COMPRESSION_NO_ENCRYPTION = 0x00;
+    const byte ALFID_ADDR3_SIZE3                = 0x33;
+
+    // Minimum length to read dataFormatIdentifier + addressAndLengthFormatIdentifier.
+    const byte REQDL_MIN_REQ_LEN   = 3;
+    // Exact length this simulator accepts: SID + DFI + ALFID + address(3) + size(3).
+    const byte REQDL_EXACT_REQ_LEN = 9;
+
+    // lengthFormatIdentifier 0x20 = maxNumberOfBlockLength is a 2-byte field
+    // (Table 10-12 worked example: "74 20 00 FF").
+    const byte RDPR_LENGTH_FORMAT_IDENTIFIER = 0x20;
+    const word TRANSFER_MAX_BLOCK_LENGTH     = 255; // matches the worked example (0x00FF)
+
+    const byte TD_MIN_REQ_LEN    = 2; // SID + blockSequenceCounter
+    const byte UPLOAD_CHUNK_SIZE = 4; // project-defined simulated bytes-per-block for uploads
+
+    const byte RTE_REQ_LEN = 1; // SID only (Table 10-16 worked example: "37" / "77")
+
+    byte  transferActive;
+    byte  transferIsDownload;       // 1 = RequestDownload in progress, 0 = RequestUpload
+    dword transferExpectedSize;     // negotiated memorySize
+    dword transferTransferredSize;  // cumulative bytes written (download) or sent (upload)
+
+    byte  transferNextBsc;          // blockSequenceCounter expected for the next NEW block
+    byte  transferHasLastBsc;       // 1 once at least one block has been accepted
+    byte  transferLastBsc;          // blockSequenceCounter of the last ACCEPTED (non-retransmit) block
+    dword transferLastBlockBytes;   // byte count of that last accepted block (for retransmit replay)
+}
+
+// ===========================================================================
+// Must be called once from the Application Layer "on preStart"
+// (e.g. from UDS_SessionInit()) before any 0x34/0x35/0x36/0x37 request is
+// handled.
+// ===========================================================================
+void UDS_Service_34_35_36_37_Init()
+{
+    TransferSession_Reset();
+}
+
+// ===========================================================================
+// Clears the transfer-session state machine. Called at module Init(), on a
+// clean RequestTransferExit completion, and by UDS_Service_31.cin's
+// eraseMemory routine (0xFF00) - a fresh erase discards any in-progress
+// transfer.
+// ===========================================================================
+void TransferSession_Reset()
+{
+    transferActive          = 0;
+    transferIsDownload      = 0;
+    transferExpectedSize    = 0;
+    transferTransferredSize = 0;
+    transferNextBsc         = 1;
+    transferHasLastBsc      = 0;
+    transferLastBsc         = 0;
+    transferLastBlockBytes  = 0;
+    write("UDS_Service_34_35_36_37: transfer session reset (inactive)");
+}
+
+byte TransferSession_IsActive()
+{
+    return transferActive;
+}
+
+// ===========================================================================
+// Shared validation/execution for RequestDownload (0x34) and RequestUpload
+// (0x35) - the two services are identical except for the SID and the
+// resulting transfer direction (Table 9-1/9-6 request layouts and Table
+// 9-2/9-7 response layouts are byte-for-byte the same shape).
+// ===========================================================================
+void HandleRequestDownloadOrUpload(byte data[], word len, byte sid, byte isDownload)
+{
+    byte  dfi;
+    byte  alfid;
+    dword memAddr;
+    dword memSize;
+    byte  responseSid;
+    byte  resp[4];
+
+    // Figure 5 step 2: SID supported in the active session? ES95486-02
+    // Table 3-1: X in Default Session.
+    if (UDS_GetCurrentSession() == SUBFUNC_DEFAULT_SESSION)
+    {
+        AppLayer_SendNegativeResponse(sid, NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Minimum length check: enough to read dataFormatIdentifier and
+    // addressAndLengthFormatIdentifier.
+    if (len < REQDL_MIN_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(sid, NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    // Table 9-3/9-8, NRC 0x22 cause: a transfer is already active.
+    if (transferActive)
+    {
+        write("UDS_Service_34_35_36_37: rejected - a transfer is already active");
+        AppLayer_SendNegativeResponse(sid, NRC_CONDITIONS_NOT_CORRECT);
+        return;
+    }
+
+    // ES95486-02 Table 3-1 Engine Condition column: "Engine stop, IGN on".
+    if (!UDS_IsEngineConditionOk())
+    {
+        AppLayer_SendNegativeResponse(sid, NRC_CONDITIONS_NOT_CORRECT);
+        return;
+    }
+
+    dfi   = data[1];
+    alfid = data[2];
+
+    // Table 9-3/9-8, NRC 0x31 cause #1/#2: unsupported dataFormatIdentifier
+    // or addressAndLengthFormatIdentifier. This simulator only supports the
+    // exact values used in ES95486-02's own worked example (see file header).
+    if (dfi != DFI_NO_COMPRESSION_NO_ENCRYPTION)
+    {
+        write("UDS_Service_34_35_36_37: unsupported dataFormatIdentifier (0x%02X)", dfi);
+        AppLayer_SendNegativeResponse(sid, NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+    if (alfid != ALFID_ADDR3_SIZE3)
+    {
+        write("UDS_Service_34_35_36_37: unsupported addressAndLengthFormatIdentifier (0x%02X)", alfid);
+        AppLayer_SendNegativeResponse(sid, NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
+    // Exact length check, now that the address/size field widths (fixed by
+    // ALFID=0x33) are known.
+    if (len != REQDL_EXACT_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(sid, NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    memAddr = ((dword)data[3] << 16) | ((dword)data[4] << 8) | data[5];
+    memSize = ((dword)data[6] << 16) | ((dword)data[7] << 8) | data[8];
+
+    // Table 9-3/9-8, NRC 0x31 cause #3: memoryAddress/memorySize not valid.
+    if (memSize == 0)
+    {
+        write("UDS_Service_34_35_36_37: memorySize is 0 - invalid");
+        AppLayer_SendNegativeResponse(sid, NRC_REQUEST_OUT_OF_RANGE);
+        return;
+    }
+
+    // Table 9-3/9-8, NRC 0x33: server security feature is active (i.e. NOT
+    // unlocked) - ES95486-02 Table 3-1 marks both services Diamond
+    // (security required) in Programming/Extended sessions.
+    if (!SecurityAccess_IsUnlocked())
+    {
+        AppLayer_SendNegativeResponse(sid, NRC_SECURITY_ACCESS_DENIED);
+        return;
+    }
+
+    // ---- Execute: start the transfer session ----
+    // 9.3: "The blockSequenceCounter of the server shall be initialized to
+    // one (1) when receiving a RequestDownload/RequestUpload."
+    transferActive          = 1;
+    transferIsDownload      = isDownload;
+    transferExpectedSize    = memSize;
+    transferTransferredSize = 0;
+    transferNextBsc         = 1;
+    transferHasLastBsc      = 0;
+    transferLastBsc         = 0;
+    transferLastBlockBytes  = 0;
+
+    responseSid = (byte)(sid + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+    resp[1] = RDPR_LENGTH_FORMAT_IDENTIFIER;
+    resp[2] = (byte)((TRANSFER_MAX_BLOCK_LENGTH >> 8) & 0xFF);
+    resp[3] = (byte)(TRANSFER_MAX_BLOCK_LENGTH & 0xFF);
+
+    // Branching explicitly (rather than passing a ternary-selected string
+    // literal to write()'s %s) to stay within this project's established,
+    // CANoe-confirmed CAPL syntax - see UDS_Service_27.cin's header note on
+    // avoiding unverified constructs.
+    if (isDownload)
+    {
+        write("UDS_Service_34_35_36_37: RequestDownload started (memAddr=0x%06X, memSize=%d bytes)",
+              memAddr, memSize);
+    }
+    else
+    {
+        write("UDS_Service_34_35_36_37: RequestUpload started (memAddr=0x%06X, memSize=%d bytes)",
+              memAddr, memSize);
+    }
+    NetworkLayer_SendResponse(resp, 4);
+}
+
+void Handle_RequestDownload(byte data[], word len)
+{
+    HandleRequestDownloadOrUpload(data, len, SID_REQUEST_DOWNLOAD, 1);
+}
+
+void Handle_RequestUpload(byte data[], word len)
+{
+    HandleRequestDownloadOrUpload(data, len, SID_REQUEST_UPLOAD, 0);
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 (see UDS_Common.cin for the
+// full chain), then the service-specific sequence/blockSequenceCounter
+// checks from 9.3.3 (Table 9-11).
+void Handle_TransferData(byte data[], word len)
+{
+    byte  bsc;
+    byte  isRetransmission;
+    dword dataBytes;
+    dword remaining;
+    dword bytesThisBlock;
+    byte  responseSid;
+    byte  resp[2 + UPLOAD_CHUNK_SIZE];
+    byte  respLen;
+    byte  i;
+
+    // Figure 5 step 2: SID supported in the active session?
+    if (UDS_GetCurrentSession() == SUBFUNC_DEFAULT_SESSION)
+    {
+        AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Minimum length check: enough to read blockSequenceCounter.
+    if (len < TD_MIN_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    // Table 9-11, NRC 0x24 cause #1: RequestDownload/RequestUpload not active.
+    if (!transferActive)
+    {
+        AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                      NRC_REQUEST_SEQUENCE_ERROR);
+        return;
+    }
+
+    // Defensive: a stray DiagnosticSessionControl mid-transfer re-locks
+    // SecurityAccess (UDS_Service_10.cin) without necessarily changing
+    // currentSession away from a non-default session, so the session check
+    // above would not catch it - re-check security explicitly here too.
+    if (!SecurityAccess_IsUnlocked())
+    {
+        AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                      NRC_SECURITY_ACCESS_DENIED);
+        return;
+    }
+
+    bsc = data[1];
+
+    if (bsc == transferNextBsc)
+    {
+        isRetransmission = 0;
+    }
+    else if (transferHasLastBsc && bsc == transferLastBsc)
+    {
+        // 9.3, use cases (a)/(c): exact repetition of the last accepted
+        // block's blockSequenceCounter is a retransmission - re-acknowledge
+        // without processing (writing/counting) it again.
+        isRetransmission = 1;
+    }
+    else
+    {
+        write("UDS_Service_34_35_36_37: wrong blockSequenceCounter (got 0x%02X, expected 0x%02X)",
+              bsc, transferNextBsc);
+        AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                      NRC_WRONG_BLOCK_SEQUENCE_COUNTER);
+        return;
+    }
+
+    if (!isRetransmission)
+    {
+        if (transferIsDownload)
+        {
+            // Table 9-9: transferRequestParameter (the actual data) is
+            // mandatory while a download is in progress - need at least 1 byte.
+            if (len < 3)
+            {
+                AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                              NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+                return;
+            }
+            // Table 9-11, NRC 0x13 cause: message length exceeds
+            // maxNumberOfBlockLength (this simulator's RequestDownload
+            // response always advertises TRANSFER_MAX_BLOCK_LENGTH).
+            if (len > TRANSFER_MAX_BLOCK_LENGTH)
+            {
+                AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                              NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+                return;
+            }
+
+            dataBytes = (dword)(len - 2);
+
+            // Table 9-11, NRC 0x71 cause #2: downloaded length does not fit
+            // the negotiated memorySize.
+            if (transferTransferredSize + dataBytes > transferExpectedSize)
+            {
+                write("UDS_Service_34_35_36_37: download exceeds negotiated memorySize "
+                      "(transferred=%d + this block=%d > expected=%d)",
+                      transferTransferredSize, dataBytes, transferExpectedSize);
+                AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                              NRC_TRANSFER_DATA_SUSPENDED);
+                return;
+            }
+
+            // No real memory to write into - this simulator only accounts
+            // for the byte count (see file header).
+            transferTransferredSize = transferTransferredSize + dataBytes;
+            bytesThisBlock = dataBytes;
+        }
+        else // upload
+        {
+            // This simulator's TransferData request for an upload carries
+            // no data (nothing for the client to send while reading).
+            if (len != 2)
+            {
+                AppLayer_SendNegativeResponse(SID_TRANSFER_DATA,
+                                              NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+                return;
+            }
+
+            remaining = transferExpectedSize - transferTransferredSize;
+            bytesThisBlock = (remaining < UPLOAD_CHUNK_SIZE) ? remaining : (dword)UPLOAD_CHUNK_SIZE;
+            transferTransferredSize = transferTransferredSize + bytesThisBlock;
+        }
+
+        transferLastBsc        = bsc;
+        transferHasLastBsc     = 1;
+        transferLastBlockBytes = bytesThisBlock;
+        transferNextBsc        = (bsc == 0xFF) ? 0x00 : (byte)(bsc + 1);
+    }
+    else
+    {
+        // Retransmission: resend a response shaped like the last accepted
+        // block, without touching transferTransferredSize/transferNextBsc.
+        bytesThisBlock = transferLastBlockBytes;
+        write("UDS_Service_34_35_36_37: blockSequenceCounter 0x%02X repeated - "
+              "retransmission, re-acknowledging without reprocessing", bsc);
+    }
+
+    responseSid = (byte)(SID_TRANSFER_DATA + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+    resp[1] = bsc;
+    respLen = 2;
+
+    if (!transferIsDownload)
+    {
+        // Simulated/dummy upload payload - no real server memory exists in
+        // this study project (see file header). A simple deterministic
+        // pattern is used so the bytes are at least inspectable in a trace.
+        for (i = 0; i < bytesThisBlock; i++)
+        {
+            resp[2 + i] = (byte)((transferTransferredSize - bytesThisBlock + i) & 0xFF);
+        }
+        respLen = (byte)(2 + bytesThisBlock);
+    }
+
+    write("UDS_Service_34_35_36_37: TransferData positive response sent "
+          "(blockSequenceCounter=0x%02X, transferred=%d/%d)",
+          bsc, transferTransferredSize, transferExpectedSize);
+    NetworkLayer_SendResponse(resp, respLen);
+}
+
+// NRC priority order per ISO 14229-1 Figure 5 (see UDS_Common.cin for the
+// full chain), then 9.4.3 (Table 9-14).
+void Handle_RequestTransferExit(byte data[], word len)
+{
+    byte responseSid;
+    byte resp[1];
+
+    // Figure 5 step 2: SID supported in the active session?
+    if (UDS_GetCurrentSession() == SUBFUNC_DEFAULT_SESSION)
+    {
+        AppLayer_SendNegativeResponse(SID_REQUEST_TRANSFER_EXIT,
+                                      NRC_SERVICE_NOT_SUPPORTED_IN_SESSION);
+        return;
+    }
+
+    // Minimum/exact length check - no transferRequestParameterRecord
+    // support in this simulator (see file header).
+    if (len != RTE_REQ_LEN)
+    {
+        AppLayer_SendNegativeResponse(SID_REQUEST_TRANSFER_EXIT,
+                                      NRC_INCORRECT_MESSAGE_LENGTH_OR_FORMAT);
+        return;
+    }
+
+    // Table 9-14, NRC 0x24 cause #2: RequestDownload/RequestUpload not active.
+    if (!transferActive)
+    {
+        AppLayer_SendNegativeResponse(SID_REQUEST_TRANSFER_EXIT,
+                                      NRC_REQUEST_SEQUENCE_ERROR);
+        return;
+    }
+
+    // Table 9-14, NRC 0x24 cause #1: "the programming process is not
+    // completed" - for a download, that means not all negotiated bytes
+    // have been transferred yet. (Not enforced for uploads - there is no
+    // equivalent "programming process" for reading data out of the server.)
+    if (transferIsDownload && transferTransferredSize != transferExpectedSize)
+    {
+        write("UDS_Service_34_35_36_37: RequestTransferExit too early "
+              "(transferred=%d, expected=%d)",
+              transferTransferredSize, transferExpectedSize);
+        AppLayer_SendNegativeResponse(SID_REQUEST_TRANSFER_EXIT,
+                                      NRC_REQUEST_SEQUENCE_ERROR);
+        return;
+    }
+
+    TransferSession_Reset();
+
+    responseSid = (byte)(SID_REQUEST_TRANSFER_EXIT + SID_POSITIVE_RESPONSE_OFFSET);
+    resp[0] = responseSid;
+
+    write("UDS_Service_34_35_36_37: RequestTransferExit positive response sent");
+    NetworkLayer_SendResponse(resp, RTE_REQ_LEN);
+}

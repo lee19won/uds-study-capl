@@ -77,6 +77,32 @@
                                             0x2E/0x2F. Stage 3 (0x31/0x34/
                                             0x35/0x36/0x37) follows in a
                                             later change.
+  2026-08-18    lee.sungwon@slworld.com    Stage 3 (final stage) of the
+                                            ES95486-02 10.2 reprogramming
+                                            sequence services: added
+                                            UDS_Service_31.cin
+                                            (RoutineControl, startRoutine
+                                            only, eraseMemory 0xFF00 /
+                                            checkProgrammingDependencies
+                                            0xFF01) and
+                                            UDS_Service_34_35_36_37.cin
+                                            (RequestDownload/RequestUpload/
+                                            TransferData/
+                                            RequestTransferExit, shared
+                                            transfer-session state
+                                            machine) - includes, Init()
+                                            call, and dispatcher cases for
+                                            SID 0x31/0x34/0x35/0x36/0x37.
+                                            UDS_PerformHardReset() now also
+                                            calls TransferSession_Reset()
+                                            as a defensive safety net (a
+                                            real power-cycle would lose
+                                            any in-RAM transfer state).
+                                            This completes the full
+                                            ES95486-02 10.2 reprogramming
+                                            sequence reproduction
+                                            requested for this project
+                                            (Stages 1-3).
 -----------------------------------------------------------------------------*/
 
 includes
@@ -95,6 +121,8 @@ includes
     #include "UDS_Service_28.cin"
     #include "UDS_Service_2E.cin"
     #include "UDS_Service_2F.cin"
+    #include "UDS_Service_31.cin"
+    #include "UDS_Service_34_35_36_37.cin"
     #include "UDS_Service_85.cin"
 }
 
@@ -126,6 +154,14 @@ on preStart
 //     reset rule directly)
 //   - ControlDTCSetting -> DTC storage re-enabled (ES95486-02 4.7: "if
 //     ECUReset service is successfully performed, DTC storage resumes")
+//   - Any in-progress RequestDownload/RequestUpload transfer session is
+//     aborted (TransferSession_Reset(), UDS_Service_34_35_36_37.cin) - a
+//     real ECU power-cycle would lose any transfer state held in RAM. This
+//     is also exactly what ES95486-02 10.2.2.9 expects: ECUReset(hardReset)
+//     is only sent AFTER a successful RequestTransferExit + successful
+//     checkProgrammingDependencies, so transferActive is normally already 0
+//     at this point - this call is a defensive safety net, not part of the
+//     documented sequence itself.
 //   - NOT reinitialized: stored DTC content (UDS_DTC_Store.cin's dtcStatus[]
 //     persists across a reset in a real ECU - only ClearDiagnosticInformation
 //     (0x14) clears it)
@@ -137,6 +173,7 @@ void UDS_PerformHardReset()
     SecurityAccess_ResetOnSessionChange();
     CommunicationControl_ReEnableOnDefaultSession();
     DTC_Store_ReEnableStorageOnDefaultSession();
+    TransferSession_Reset();
 }
 
 // ===========================================================================
@@ -189,6 +226,26 @@ void AppLayer_OnDiagRequestReceived(byte data[], word len)
             UDS_Handle_InputOutputControlByIdentifier(data, len);
             break;
 
+        case 0x31:
+            UDS_Handle_RoutineControl(data, len);
+            break;
+
+        case 0x34:
+            UDS_Handle_RequestDownload(data, len);
+            break;
+
+        case 0x35:
+            UDS_Handle_RequestUpload(data, len);
+            break;
+
+        case 0x36:
+            UDS_Handle_TransferData(data, len);
+            break;
+
+        case 0x37:
+            UDS_Handle_RequestTransferExit(data, len);
+            break;
+
         case 0x3E:
             UDS_Handle_TesterPresent(data, len);
             break;
@@ -213,6 +270,7 @@ void UDS_SessionInit()
     CommunicationControl_Init();
     UDS_Service_2E_Init();
     UDS_Service_2F_Init();
+    UDS_Service_34_35_36_37_Init();
 }
 
 void UDS_Handle_DiagnosticSessionControl(byte data[], word len)
@@ -268,6 +326,31 @@ void UDS_Handle_WriteDataByIdentifier(byte data[], word len)
 void UDS_Handle_InputOutputControlByIdentifier(byte data[], word len)
 {
     Handle_InputOutputControlByIdentifier(data, len);
+}
+
+void UDS_Handle_RoutineControl(byte data[], word len)
+{
+    Handle_RoutineControl(data, len);
+}
+
+void UDS_Handle_RequestDownload(byte data[], word len)
+{
+    Handle_RequestDownload(data, len);
+}
+
+void UDS_Handle_RequestUpload(byte data[], word len)
+{
+    Handle_RequestUpload(data, len);
+}
+
+void UDS_Handle_TransferData(byte data[], word len)
+{
+    Handle_TransferData(data, len);
+}
+
+void UDS_Handle_RequestTransferExit(byte data[], word len)
+{
+    Handle_RequestTransferExit(data, len);
 }
 
 // ===========================================================================
